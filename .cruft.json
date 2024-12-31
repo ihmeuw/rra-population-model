@@ -1,0 +1,18 @@
+{
+  "template": "https://github.com/collijk/python-package-cookiecutter",
+  "commit": "cd59edc69d51f9485bca69eb940e0706bc65e9ba",
+  "checkout": null,
+  "context": {
+    "cookiecutter": {
+      "author_name": "James Collins",
+      "author_email": "collijk@uw.edu",
+      "github_username": "collijk",
+      "project_name": "RRA Population Model",
+      "project_slug": "rra-population-model",
+      "package_name": "rra_population_model",
+      "project_short_description": "Geospatial model of where people live.",
+      "_template": "https://github.com/collijk/python-package-cookiecutter"
+    }
+  },
+  "directory": null
+}

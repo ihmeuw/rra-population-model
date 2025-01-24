@@ -30,8 +30,20 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10, <4.0"
+python = ">=3.10, <3.13"
 click = "*"
+geopandas = "^1.0.1"
+numpy = "^2.2.1"
+pandas = "^2.2.3"
+rasterra = "^0.6.1"
+shapely = "^2.0.6"
+pydantic = "^2.10.4"
+rra-tools = "^1.0.22"
+pyyaml = "^6.0.2"
+scikit-learn = "^1.6.0"
+pyarrow = "^18.1.0"
+torch = "^2.5.1"
+lightning = "^2.5.0.post0"
 
 [tool.poetry.group.dev.dependencies]
 mkdocstrings = {version = "*", extras = ["python"]}
@@ -54,7 +66,8 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-my-cli = "rra_population_model.cli:main"
+pmrun = "rra_population_model.cli:pmrun"
+pmtask = "rra_population_model.cli:pmtask"
 
 [tool.ruff]
 target-version = "py310" # The lowest supported version
@@ -66,13 +79,25 @@ target-version = "py310" # The lowest supported version
 # For individual ignore cases, prefer inline `# noqa`s within the code.
 select = ["ALL"]
 ignore = [
-    "COM812",   # flake8 missing trailing comma, formatter handles
-    "ISC001",   # Implicit string concatenation
+    "COM812",   # flake8 missing trailing comma, fomatter handles
+    "ISC001",   # Implicit string concatenation is not allowed
     "ANN",      # Type hints related, let mypy handle these.
     "D",        # Docstrings related, way too strict to our taste
-    "RUF007",   # zip is idiomatic, this is a dumb check
-    "RET505",   # Else after return, makes a lot of false positives
-    "E501",     # Line too long, this is autoformatted
+    "T201",     # Use of `print` detected, we don't have formal logging yet.
+    "PD901",    # Don't use generic 'df', practicality beats purity.
+    "PD008",    # .at is okay
+    "PD010",    # I like .unstack()
+    "RET504",   # Assign to variable before return, useful for debugging
+    "FBT001",   # Boolean type positional arg, annoying with cli flags
+    "S603",     # Supbrocess arg validation, prone to false positives
+    "FIX002",   # TODOs are okay.
+    "TD002",    # TODOs don't need an author
+    "TD003",    # TODOs don't need a linked issue
+    "PYI041",   # float | int is better explicit typing than depending on a special case
+    "RUF007",   # zip is idiomatic, this check is dumb.
+    "RET505",   # Else after return, too many false positives.
+    "E501",     # Line too long, handled by ruff format
+    "TCH002",   # Type-checking on 3rd party packages.
 ]
 
 [tool.ruff.lint.per-file-ignores]

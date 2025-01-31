@@ -38,7 +38,7 @@ pandas = "^2.2.3"
 rasterra = "^0.6.1"
 shapely = "^2.0.6"
 pydantic = "^2.10.4"
-rra-tools = "^1.0.22"
+rra-tools = "^1.0.23"
 pyyaml = "^6.0.2"
 scikit-learn = "^1.6.0"
 pyarrow = "^18.1.0"
@@ -97,7 +97,8 @@ ignore = [
     "RUF007",   # zip is idiomatic, this check is dumb.
     "RET505",   # Else after return, too many false positives.
     "E501",     # Line too long, handled by ruff format
-    "TCH002",   # Type-checking on 3rd party packages.
+    "TC002",    # Type-checking on 3rd party packages.
+    "PLR0913",  # We have a long of function args a lot, and making better datastru
 ]
 
 [tool.ruff.lint.per-file-ignores]

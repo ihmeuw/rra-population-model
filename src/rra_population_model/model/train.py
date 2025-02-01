@@ -4,6 +4,8 @@ import click
 from lightning import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
 
+from rra_population_model import cli_options as clio
+from rra_population_model import constants as pmc
 from rra_population_model.data import (
     PopulationModelData,
 )
@@ -12,8 +14,6 @@ from rra_population_model.model.modeling import (
     PPSDataModule,
     PPSModel,
 )
-from rra_population_model import cli_options as clio
-from rra_population_model import constants as pmc
 
 
 def train_main(resolution: str, model_name: str, output_root: str | Path) -> None:
@@ -47,9 +47,9 @@ def train_main(resolution: str, model_name: str, output_root: str | Path) -> Non
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def train(output_dir: str) -> None:
     provider = "ghsl"
-    denominator = "residential_volume"
+    denominator = "residential_density"
     use_ntl = "log"  # "yes", "no", "log"
-    resolution = "100"
+    resolution = "40"
 
     suffix, ntl_feature = {
         "yes": ("ntl", ["nighttime_lights"]),
@@ -57,8 +57,9 @@ def train(output_dir: str) -> None:
         "log": ("log_ntl", ["log_nighttime_lights"]),
     }[use_ntl]
 
-    bd_features = [f"{provider}_{denominator}_{radius}m" for radius in pmc.FEATURE_AVERAGE_RADII] 
-
+    bd_features = [
+        f"{provider}_{denominator}_{radius}m" for radius in pmc.FEATURE_AVERAGE_RADII
+    ]
 
     name = f"{provider}_{denominator}_{suffix}"
     spec = ModelSpecification(

@@ -15,7 +15,7 @@ be broken into multiple kinds of tasks.  Consult `pmrun preprocess --help` and
 2. `pmrun preprocess features`: This step generates raster features at the
    pixel level and writes them out by block. `features` has the single task:
    `pmtask preprocess features`.
-3. `pmrun preprocess census_data`: Prepare database of linked census data for 
+3. `pmrun preprocess census_data`: Prepare database of linked census data for
    processing into training data.
 4. `pmrun preprocess training_data`: This step generates the training data
    for the people per structure model including the features and the target variable.

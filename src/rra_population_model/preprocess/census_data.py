@@ -2,10 +2,9 @@ import click
 import pandas as pd
 from rra_tools import jobmon
 
-from rra_population_model.data import PopulationModelData, RRAPopulationData
-from rra_population_model import constants as pmc
 from rra_population_model import cli_options as clio
-
+from rra_population_model import constants as pmc
+from rra_population_model.data import PopulationModelData, RRAPopulationData
 
 
 def filter_iso3_year_list(

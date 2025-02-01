@@ -1,11 +1,10 @@
-from pathlib import Path
-import time
-from typing import Any, TYPE_CHECKING
 import json
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
-import numpy as np
 import geopandas as gpd
+import numpy as np
+import pandas as pd
 import rasterra as rt
 import shapely
 import yaml
@@ -20,7 +19,7 @@ if TYPE_CHECKING:
 
 class TileIndexInfo(BaseModel):
     tile_size: int
-    tile_resolution: int
+    tile_resolution: str
     block_size: int
     crs: str
 
@@ -39,12 +38,12 @@ class BuildingDensityData:
     def tiles(self) -> Path:
         return self.root / "tiles"
 
-    def load_tile_index(self, resolution: int) -> gpd.GeoDataFrame:
+    def load_tile_index(self, resolution: str) -> gpd.GeoDataFrame:
         self._check_resolution(resolution)
         path = self.tiles / f"{resolution}m" / "tile_index.parquet"
         return gpd.read_parquet(path)
 
-    def load_tile_index_info(self, resolution: int) -> TileIndexInfo:
+    def load_tile_index_info(self, resolution: str) -> TileIndexInfo:
         self._check_resolution(resolution)
         path = self.tiles / f"{resolution}m" / "tile_index_info.yaml"
         with path.open() as f:
@@ -53,7 +52,7 @@ class BuildingDensityData:
 
     def tile_path(
         self,
-        resolution: int,
+        resolution: str,
         provider: str,
         block_key: str,
         time_point: str,
@@ -69,7 +68,7 @@ class BuildingDensityData:
 
     def load_tile(
         self,
-        resolution: int,
+        resolution: str,
         provider: str,
         block_key: str,
         time_point: str,
@@ -80,14 +79,14 @@ class BuildingDensityData:
         tile_path = self.tile_path(resolution, provider, block_key, time_point, measure)
         return rt.load_raster(tile_path, bounds=bounds)
 
-    def _check_resolution(self, resolution: int) -> None:
+    def _check_resolution(self, resolution: str) -> None:
         available_resolutions = [
             p.name for p in self.tiles.iterdir() if p.is_dir() and p.name.endswith("m")
         ]
         if f"{resolution}m" not in available_resolutions:
             msg = f"Resolution {resolution} not available. Available resolutions: {available_resolutions}"
             raise ValueError(msg)
-        
+
 
 class RRAPopulationData:
     """Read-only data loader for the population model."""
@@ -102,7 +101,7 @@ class RRAPopulationData:
     @property
     def census(self) -> Path:
         return self.root / "census"
-    
+
     def get_census_dir(
         self,
         iso3: str,
@@ -113,7 +112,7 @@ class RRAPopulationData:
     def list_census_years(self) -> list[tuple[str, str]]:
         """List all available census years by country."""
         return self._list_years(self.census)
-    
+
     def load_census(
         self,
         census_measure: str,
@@ -158,7 +157,7 @@ class RRAPopulationData:
     def list_shapefile_years(self) -> list[tuple[str, str]]:
         """List all available shapefile years by country."""
         return self._list_years(self.shapefiles)
-    
+
     def load_shapefile(
         self,
         admin_level: int,
@@ -208,13 +207,13 @@ class RRAPopulationData:
         path = self.ihme_data / "gbd_hierarchy.parquet"
         df = pd.read_parquet(path)
         return df
-    
+
     def load_ihme_populations(self) -> pd.DataFrame:
         """Load the global population data."""
         path = self.ihme_data / "gbd_population.parquet"
         df = pd.read_parquet(path)
         return df
-    
+
     def load_ihme_shapes(self) -> gpd.GeoDataFrame:
         """Load the global admin shapefile."""
         path = self.ihme_data / "gbd_shapes.parquet"
@@ -240,7 +239,7 @@ class RRAPopulationData:
 
 class ModelFrameInfo(BaseModel):
     tile_size: int
-    tile_resolution: int
+    tile_resolution: str
     block_size: int
     crs: str
 
@@ -262,14 +261,15 @@ class PopulationModelData:
 
     def _create_model_root(self) -> None:
         mkdir(self.root, exist_ok=True)
+        mkdir(self.logs, exist_ok=True)
 
         mkdir(self.training_data, exist_ok=True)
         mkdir(self.admin_training_data, exist_ok=True)
         mkdir(self.tile_training_data, exist_ok=True)
         mkdir(self.features, exist_ok=True)
 
-        # mkdir(self.input_qc, exist_ok=True)
-        # mkdir(self.census_qc, exist_ok=True)
+        mkdir(self.input_qc, exist_ok=True)
+        mkdir(self.census_qc, exist_ok=True)
 
         mkdir(self.models, exist_ok=True)
         mkdir(self.predictions, exist_ok=True)
@@ -284,6 +284,13 @@ class PopulationModelData:
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def logs(self) -> Path:
+        return self.root / "logs"
+
+    def log_dir(self, step_name: str) -> Path:
+        return self.logs / step_name
 
     @property
     def training_data(self) -> Path:
@@ -395,7 +402,7 @@ class PopulationModelData:
 
     def save_modeling_frame(
         self,
-        resolution: int | str,
+        resolution: str,
         model_frame: gpd.GeoDataFrame,
         modeling_frame_info: ModelFrameInfo,
     ) -> None:
@@ -409,11 +416,11 @@ class PopulationModelData:
         with modeling_frame_info_path.open("w") as f:
             yaml.dump(modeling_frame_info.model_dump(), f)
 
-    def load_modeling_frame(self, resolution: int | str = 40) -> gpd.GeoDataFrame:
+    def load_modeling_frame(self, resolution: str) -> gpd.GeoDataFrame:
         path = self.features / f"{resolution}m" / self._modeling_frame_filename
         return gpd.read_parquet(path)
 
-    def load_modeling_frame_info(self, resolution: int | str = 40) -> ModelFrameInfo:
+    def load_modeling_frame_info(self, resolution: str) -> ModelFrameInfo:
         path = self.features / f"{resolution}m" / self._modeling_frame_info_filename
         with path.open() as f:
             info = yaml.safe_load(f)
@@ -421,7 +428,7 @@ class PopulationModelData:
 
     def feature_path(
         self,
-        resolution: int | str,
+        resolution: str,
         block_key: str,
         feature_name: str,
         time_point: str,
@@ -435,7 +442,7 @@ class PopulationModelData:
 
     def link_feature(
         self,
-        resolution: int | str,
+        resolution: str,
         block_key: str,
         feature_name: str,
         time_point: str,
@@ -450,7 +457,7 @@ class PopulationModelData:
     def save_feature(
         self,
         feature_raster: rt.RasterArray,
-        resolution: int | str,
+        resolution: str,
         block_key: str,
         feature_name: str,
         time_point: str,
@@ -462,7 +469,7 @@ class PopulationModelData:
 
     def feature_exists(
         self,
-        resolution: int | str,
+        resolution: str,
         block_key: str,
         feature_name: str,
         time_point: str,
@@ -471,7 +478,7 @@ class PopulationModelData:
         return path.exists()
 
     def list_features(
-        self, resolution: int | str, block_key: str, time_point: str
+        self, resolution: str, block_key: str, time_point: str
     ) -> list[str]:
         block_dir = self.feature_path(resolution, block_key, "", time_point).parent
         return [
@@ -481,7 +488,7 @@ class PopulationModelData:
 
     def load_feature(
         self,
-        resolution: int | str,
+        resolution: str,
         block_key: str,
         feature_name: str,
         time_point: str,
@@ -510,7 +517,8 @@ class PopulationModelData:
         return self.models / f"{resolution}m" / model_name
 
     def save_model_specification(
-        self, model_spec: "ModelSpecification",
+        self,
+        model_spec: "ModelSpecification",
     ) -> None:
         resolution = model_spec.resolution
         model_name = model_spec.name
@@ -520,8 +528,11 @@ class PopulationModelData:
         with path.open("w") as f:
             json.dump(model_spec.model_dump(mode="json"), f)
 
-    def load_model_specification(self, resolution: str, model_name: str) -> "ModelSpecification":
+    def load_model_specification(
+        self, resolution: str, model_name: str
+    ) -> "ModelSpecification":
         from rra_population_model.model.modeling.datamodel import ModelSpecification
+
         path = self.model_root(resolution, model_name) / "specification.json"
         with path.open() as f:
             spec = json.load(f)
@@ -531,8 +542,15 @@ class PopulationModelData:
     def predictions(self) -> Path:
         return Path(self.root, "predictions")
 
-    def prediction_path(self, block_key: str, time_point: str, model_spec: "ModelSpecification") -> Path:
-        return self.predictions / f"{model_spec.resolution}m" / model_spec.name / f"{block_key}_{time_point}.tif"
+    def prediction_path(
+        self, block_key: str, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        return (
+            self.predictions
+            / f"{model_spec.resolution}m"
+            / model_spec.name
+            / f"{block_key}_{time_point}.tif"
+        )
 
     def save_prediction(
         self,
@@ -546,7 +564,10 @@ class PopulationModelData:
         save_raster(raster, path)
 
     def load_prediction(
-        self, block_key: str, time_point: str, model_spec: "ModelSpecification",
+        self,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
     ) -> rt.RasterArray:
         path = self.prediction_path(block_key, time_point, model_spec)
         return rt.load_raster(path)
@@ -563,7 +584,9 @@ class PopulationModelData:
         path = self.raking_utility_data / "raking_population.parquet"
         return pd.read_parquet(path)
 
-    def load_raking_shapes(self, bbox: shapely.Polygon | None = None) -> gpd.GeoDataFrame:
+    def load_raking_shapes(
+        self, bbox: shapely.Polygon | None = None
+    ) -> gpd.GeoDataFrame:
         path = self.raking_utility_data / "raking_shapes.parquet"
         return gpd.read_parquet(path, bbox=bbox)
 
@@ -571,8 +594,15 @@ class PopulationModelData:
     def raked_predictions(self) -> Path:
         return self.raking / "predictions"
 
-    def raked_prediction_path(self, block_key: str, time_point: str, model_spec: "ModelSpecification") -> Path:
-        return self.raked_predictions / f"{model_spec.resolution}m" / model_spec.name / f"{block_key}_{time_point}.tif"
+    def raked_prediction_path(
+        self, block_key: str, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        return (
+            self.raked_predictions
+            / f"{model_spec.resolution}m"
+            / model_spec.name
+            / f"{block_key}_{time_point}.tif"
+        )
 
     def save_raked_prediction(
         self,
@@ -582,11 +612,14 @@ class PopulationModelData:
         model_spec: "ModelSpecification",
     ) -> None:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
-        mkdir(path.parent, exist_ok=True)
+        mkdir(path.parent, exist_ok=True, parents=True)
         save_raster(raster, path)
 
     def load_raked_prediction(
-        self, block_key: str, time_point: str, model_spec: "ModelSpecification",
+        self,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
     ) -> rt.RasterArray:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
         return rt.load_raster(path)
@@ -595,8 +628,15 @@ class PopulationModelData:
     def compiled(self) -> Path:
         return Path(self.root, "compiled")
 
-    def compiled_path(self, group_key: str, time_point: str, model_spec: "ModelSpecification") -> Path:
-        return self.compiled / f"{model_spec.resolution}m" / model_spec.name / f"{group_key}_{time_point}.tif"
+    def compiled_path(
+        self, group_key: str, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        return (
+            self.compiled
+            / f"{model_spec.resolution}m"
+            / model_spec.name
+            / f"{group_key}_{time_point}.tif"
+        )
 
     def save_compiled(
         self,
@@ -607,7 +647,7 @@ class PopulationModelData:
         **save_kwargs: Any,
     ) -> None:
         path = self.compiled_path(group_key, time_point, model_spec)
-        mkdir(path.parent, exist_ok=True)
+        mkdir(path.parent, exist_ok=True, parents=True)
         save_raster_to_cog(raster, path, **save_kwargs)
 
     @property
@@ -636,7 +676,9 @@ class PopulationModelData:
     def itu_results(self) -> Path:
         return self.itu / "results"
 
-    def save_itu_results(self, raster: rt.RasterArray, iso3: str, model_spec: "ModelSpecification") -> None:
+    def save_itu_results(
+        self, raster: rt.RasterArray, iso3: str, model_spec: "ModelSpecification"
+    ) -> None:
         resolution = model_spec.resolution
         model_name = model_spec.name
         out_path = self.itu_results / f"{resolution}m" / model_name / f"{iso3}.tif"

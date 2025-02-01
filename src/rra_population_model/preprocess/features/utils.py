@@ -4,9 +4,9 @@ from typing import Literal, NamedTuple
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
+import pyproj
 import rasterra as rt
 import shapely
-import pyproj
 from affine import Affine
 from rasterio.fill import fillnodata
 from scipy.signal import oaconvolve
@@ -17,6 +17,7 @@ from rra_population_model.data import BuildingDensityData, PopulationModelData
 #############
 # Utilities #
 #############
+
 
 def precise_floor(a: float, precision: int = 0) -> float:
     """Round a number down to a given precision.
@@ -62,7 +63,7 @@ def suppress_noise(
 class FeatureMetadata(NamedTuple):
     model_frame: gpd.GeoDataFrame
     block_frame: gpd.GeoDataFrame
-    working_crs: pyproj.CRS
+    working_crs: str | pyproj.CRS
     block_bounds: dict[str, shapely.Polygon]
     block_template: rt.RasterArray
     resolution: str
@@ -76,7 +77,7 @@ class FeatureMetadata(NamedTuple):
             "block_key": self.block_key,
             "time_point": self.time_point,
         }
-    
+
 
 def get_feature_metadata(
     pm_data: PopulationModelData,
@@ -85,13 +86,12 @@ def get_feature_metadata(
     block_key: str,
     time_point: str,
 ) -> FeatureMetadata:
-    
     model_frame = pm_data.load_modeling_frame(resolution)
     block_frame = model_frame[model_frame.block_key == block_key]
     working_crs = get_working_crs(block_frame)
     block_bounds = get_block_bounds(block_frame, model_frame, working_crs)
     block_template = bd_data.load_tile(  # Any provider or measure would do here
-        provider="ghsl_r2023a",
+        provider="microsoft_v4",
         measure="density",
         resolution=resolution,
         time_point="2020q1",
@@ -107,13 +107,12 @@ def get_feature_metadata(
         block_key=block_key,
         time_point=time_point,
     )
-    
 
 
 def get_block_bounds(
     block_frame: gpd.GeoDataFrame,
     model_frame: gpd.GeoDataFrame,
-    working_crs: pyproj.CRS,
+    working_crs: str | pyproj.CRS,
 ) -> dict[str, shapely.Polygon]:
     model_poly_working = (
         block_frame.dissolve("block_key").to_crs(working_crs).geometry.iloc[0]
@@ -130,16 +129,18 @@ def get_block_bounds(
         .dissolve("block_key")
         .geometry.to_dict()
     )
-    return block_bounds
+    return block_bounds  # type: ignore[no-any-return]
 
 
-def get_working_crs(block_frame: gpd.GeoDataFrame) -> str:
+def get_working_crs(block_frame: gpd.GeoDataFrame) -> str | pyproj.CRS:
     """Choose a working CRS based on the extent of the block frame.
 
     If the block frame crosses the antimeridian, we need to use a special CRS
     that can handle this. Otherwise, we can use the standard equal area CRS.
     """
-    xmin, ymin, xmax, ymax = block_frame.to_crs(pmc.CRSES["wgs84"].to_pyproj()).total_bounds
+    xmin, ymin, xmax, ymax = block_frame.to_crs(
+        pmc.CRSES["wgs84"].to_pyproj()
+    ).total_bounds
 
     longitude_cutoff = 170
     if xmax < -longitude_cutoff or xmin > longitude_cutoff:
@@ -150,7 +151,7 @@ def get_working_crs(block_frame: gpd.GeoDataFrame) -> str:
 
 
 def get_working_model_frame(
-    model_frame: gpd.GeoDataFrame, working_crs: str
+    model_frame: gpd.GeoDataFrame, working_crs: str | pyproj.CRS
 ) -> gpd.GeoDataFrame:
     model_frame_working = model_frame.to_crs(working_crs)
     # If we're working in an antimeridian CRS, the reprojection will cause any geometries

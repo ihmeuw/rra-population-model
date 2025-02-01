@@ -5,19 +5,18 @@ from typing import Any, Literal
 import click
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter
-from rra_tools import jobmon
+from rra_tools import jobmon, shell_tools
 
+from rra_population_model import cli_options as clio
+from rra_population_model import constants as pmc
 from rra_population_model.data import (
     PopulationModelData,
 )
 from rra_population_model.model.modeling import (
     InferenceDataModule,
-    PPSModel,
     ModelSpecification,
+    PPSModel,
 )
-
-from rra_population_model import cli_options as clio
-from rra_population_model import constants as pmc
 
 
 class CustomWriter(BasePredictionWriter):
@@ -63,6 +62,8 @@ def inference_main(
     pm_data = PopulationModelData(output_dir)
     model = PPSModel.load_from_checkpoint(model_path)
     model_spec = model.specification
+    root_dir = pm_data.prediction_path("B-0000X-0000Y", time_point, model_spec).parent
+    shell_tools.mkdir(root_dir, parents=True, exist_ok=True)
 
     modeling_frame = pm_data.load_modeling_frame(model_spec.resolution)
     block_keys = modeling_frame.block_key.unique().tolist()
@@ -71,8 +72,11 @@ def inference_main(
         model.specification.model_dump(),
         block_keys,
         time_point,
+        num_workers=8,
     )
-    pred_writer = CustomWriter(pm_data, model_spec, time_point, write_interval="batch")
+    pred_writer = CustomWriter(
+        pm_data, model.specification, time_point, write_interval="batch"
+    )
     trainer = Trainer(
         callbacks=[pred_writer],
         enable_progress_bar=progress_bar,

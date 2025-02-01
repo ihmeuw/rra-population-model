@@ -10,23 +10,24 @@ import shapely
 import tqdm
 from rasterra._features import raster_geometry_mask
 from rra_tools import jobmon, parallel
-from rra_tools.shell_tools import touch
+from rra_tools.shell_tools import mkdir, touch
 
-from rra_population_model.data import PopulationModelData
-from rra_population_model import constants as pmc
 from rra_population_model import cli_options as clio
+from rra_population_model import constants as pmc
+from rra_population_model.data import PopulationModelData
 
 
 def load_admin_populations(
     pm_data: PopulationModelData,
     time_point: str,
 ) -> gpd.GeoDataFrame:
-    all_pop = pm_data.load_raking_population()
-    all_pop = all_pop.set_index(['year_id', 'location_id'])['population']
+    all_pop = pm_data.load_raking_population().set_index(["year_id", "location_id"])[
+        "population"
+    ]
     # Interpolate the time point population
     if "q" in time_point:
         year, quarter = (int(s) for s in time_point.split("q"))
-        next_year = min(year+1, 2100)
+        next_year = min(year + 1, 2100)
         weight = (int(quarter) - 1) / 4
 
         prior_year_pop = all_pop.loc[year]
@@ -43,7 +44,7 @@ def load_admin_populations(
 
 
 class AggregationArgs(NamedTuple):
-    resolution: int
+    resolution: str
     model_name: str
     block_key: str
     time_point: str
@@ -78,7 +79,7 @@ def aggregate_unraked_population(
 
 
 def make_raking_factors_main(
-    resolution: int,
+    resolution: str,
     model_name: str,
     time_point: str,
     output_dir: str,
@@ -105,12 +106,14 @@ def make_raking_factors_main(
             .geometry.to_dict()
         )
         compute_location_args.append(
-            AggregationArgs(resolution, model_name, block_key, time_point, shape_map, tile_poly)
+            AggregationArgs(
+                resolution, model_name, block_key, time_point, shape_map, tile_poly
+            )
         )
 
     print("Aggregating population")
     aggregate_pops_by_block = parallel.run_parallel(
-        aggregate_unraked_population,  # type: ignore[arg-type]
+        aggregate_unraked_population,
         compute_location_args,
         num_cores=num_cores,
         progress_bar=progress_bar,
@@ -129,20 +132,28 @@ def make_raking_factors_main(
 
     print("Building raking args")
     raking_factors_by_block = []
-    for loc_args in compute_location_args:
+    for loc_args in tqdm.tqdm(compute_location_args, disable=not progress_bar):
         for location_id, geom in loc_args.shape_map.items():
             raking_factors_by_block.append(
                 (loc_args.block_key, location_id, geom, raking_factors[location_id])
             )
 
+    print("Collating")
     out = gpd.GeoDataFrame(
         raking_factors_by_block,
         columns=["block_key", "location_id", "geometry", "raking_factor"],
         crs=model_frame.crs,
     )
-    out_path = pm_data.raking_utility_data / f"raking_factors_{time_point}.parquet"
+    print("Saving")
+    out_path = (
+        pm_data.raking_utility_data
+        / resolution
+        / model_name
+        / f"raking_factors_{time_point}.parquet"
+    )
     if out_path.exists():
         out_path.unlink()
+    mkdir(out_path.parent, exist_ok=True, parents=True)
     touch(out_path)
     out.to_parquet(out_path)
 
@@ -150,12 +161,12 @@ def make_raking_factors_main(
 @click.command()  # type: ignore[arg-type]
 @clio.with_resolution()
 @clio.with_model_name()
-@clio.with_time_point(choices=pmc.ANNUAL_TIME_POINTS)
+@clio.with_time_point(choices=pmc.ALL_TIME_POINTS)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_progress_bar()
 def make_raking_factors_task(
-    resolution: int,
+    resolution: str,
     model_name: str,
     time_point: str,
     output_dir: str,
@@ -168,7 +179,7 @@ def make_raking_factors_task(
 
 
 def rake_main(
-    resolution: int,
+    resolution: str,
     model_name: str,
     block_key: str,
     time_point: str,
@@ -185,7 +196,10 @@ def rake_main(
 
     print("Loading raking factors")
     raking_data = gpd.read_parquet(
-        pm_data.raking_utility_data / f"raking_factors_{time_point}.parquet",
+        pm_data.raking_utility_data
+        / resolution
+        / model_name
+        / f"raking_factors_{time_point}.parquet",
         filters=[("block_key", "==", block_key)],
     )
 
@@ -233,10 +247,10 @@ def rake_main(
 @clio.with_resolution()
 @clio.with_model_name()
 @clio.with_block_key()
-@clio.with_time_point(choices=pmc.ANNUAL_TIME_POINTS)
+@clio.with_time_point(choices=pmc.ALL_TIME_POINTS)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def rake_task(
-    resolution: int,
+    resolution: str,
     model_name: str,
     block_key: str,
     time_point: str,
@@ -245,18 +259,16 @@ def rake_task(
     rake_main(resolution, model_name, block_key, time_point, output_dir)
 
 
-
-
 @click.command()  # type: ignore[arg-type]
 @clio.with_resolution(allow_all=False)
 @clio.with_model_name()
-@clio.with_time_point(choices=[str(y) for y in range(2100, 2101)], allow_all=True)
+@clio.with_time_point(allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_queue()
 def rake(
-    resolution: int,
-    model_name: str,
+    resolution: str,
+    model_name: str,  # noqa: ARG001
     time_point: str,
     output_dir: str,
     num_cores: int,
@@ -266,30 +278,37 @@ def rake(
 
     print("Preparing runs")
 
+    model_names = [
+        # "msftv4_density_log_ntl",
+        "ghsl_density_log_ntl",
+        "ghsl_volume_log_ntl",
+        "ghsl_residential_density_log_ntl",
+        "ghsl_residential_volume_log_ntl",
+    ]
 
-    # print("Generating raking factors")
-    # jobmon.run_parallel(
-    #     runner="pmtask postprocess",
-    #     task_name="make_raking_factors",
-    #     task_resources={
-    #         "queue": queue,
-    #         "cores": num_cores,
-    #         "memory": f"{num_cores * 7}G",
-    #         "runtime": "60m",
-    #         "project": "proj_rapidresponse",
-    #     },
-    #     node_args={
-    #         "time-point": time_point,
-    #     },
-    #     task_args={
-    #         "resolution": resolution,
-    #         "model-name": model_name,
-    #         "num-cores": num_cores,
-    #         "output-dir": output_dir,
-    #     },
-    #     max_attempts=1,
-    #     log_root=pm_data.raking,
-    # )
+    print("Generating raking factors")
+    jobmon.run_parallel(
+        runner="pmtask postprocess",
+        task_name="make_raking_factors",
+        task_resources={
+            "queue": queue,
+            "cores": num_cores,
+            "memory": f"{num_cores * 15}G",
+            "runtime": "240m",
+            "project": "proj_rapidresponse",
+        },
+        node_args={
+            "time-point": time_point,
+            "model-name": model_names,
+        },
+        task_args={
+            "resolution": resolution,
+            "num-cores": num_cores,
+            "output-dir": output_dir,
+        },
+        max_attempts=1,
+        log_root=pm_data.raking,
+    )
 
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()
@@ -301,17 +320,17 @@ def rake(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "25G",
-            "runtime": "10m",
+            "memory": "50G",
+            "runtime": "25m",
             "project": "proj_rapidresponse",
         },
         node_args={
             "block-key": block_keys,
             "time-point": time_point,
+            "model-name": model_names,
         },
         task_args={
             "resolution": resolution,
-            "model-name": model_name,
             "output-dir": output_dir,
         },
         max_attempts=3,

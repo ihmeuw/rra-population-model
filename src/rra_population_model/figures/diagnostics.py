@@ -13,8 +13,8 @@ import pandas as pd
 
 from rra_population_model.data import (
     PopulationModelData,
+    RRAPopulationData,
 )
-from rra_population_pipelines.shared.data import RRAPopulationData
 
 
 def plot_area_distribution() -> None:
@@ -38,7 +38,7 @@ def plot_area_distribution() -> None:
 def plot_building_density_histogram(tile_key: str) -> None:
     pop_data = RRAPopulationData()
     pm_data = PopulationModelData()
-    modeling_frame = pm_data.load_modeling_frame(100)
+    modeling_frame = pm_data.load_modeling_frame("100")
     tile_poly = modeling_frame[modeling_frame.tile_key == tile_key].geometry.iloc[0]
     bdi = pop_data.load_building_density_index().to_crs(modeling_frame.crs)  # type: ignore[attr-defined]
     bd_tiles = bdi[bdi.intersects(tile_poly)].quad_name.tolist()

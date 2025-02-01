@@ -4,12 +4,12 @@ import numpy as np
 import rasterra as rt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from rra_tools.plotting import strip_axes
 from skimage import exposure
 
 from rra_population_model.data import (
     PopulationModelData,
 )
-from rra_population_pipelines.shared.plot_utils import strip_axes
 
 
 def raster_and_gdf_plot(
@@ -32,11 +32,11 @@ def raster_and_gdf_plot(
 
 def make_tile_diagnostics(tile_key: str) -> None:
     pm_data = PopulationModelData()
-    model_frame = pm_data.load_modeling_frame()
+    model_frame = pm_data.load_modeling_frame("100")
     tile_meta = model_frame[model_frame.tile_key == tile_key]
     block_key = tile_meta.block_key.iloc[0]
     tile_poly = tile_meta.geometry.iloc[0]
-    features = pm_data.load_block_features(block_key, "2020q1", tile_poly)
+    features = pm_data.load_features(block_key, "2020q1", tile_poly)  # type: ignore[attr-defined]
     if "night_time_lights_alt" in features:
         del features["night_time_lights_alt"]
 

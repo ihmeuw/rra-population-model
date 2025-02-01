@@ -14,15 +14,15 @@ from matplotlib.colors import Colormap
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PyPDF2 import PdfMerger
 from rra_tools import jobmon
+from rra_tools.plotting import strip_axes, write_or_show
 from rra_tools.shell_tools import touch
 
+import rra_population_model.constants as pmc
+from rra_population_model import cli_options as clio
+from rra_population_model.constants import CRSES
 from rra_population_model.data import (
-    PEOPLE_PER_STRUCTURE_ROOT,
     PopulationModelData,
 )
-from rra_population_pipelines.shared.cli_tools import options as clio
-from rra_population_pipelines.shared.constants import CRS
-from rra_population_pipelines.shared.plot_utils import strip_axes, write_or_show
 
 DEFAULT_LINEWIDTH = 1.0
 CMAP = plt.get_cmap("viridis")
@@ -48,7 +48,7 @@ def round_to_sigfigs(x: float, sigfigs: int) -> float:
 def generate_mainland_mask(gdf: gpd.GeoDataFrame) -> list[str]:
     msg = "This function is not yet implemented."
     raise NotImplementedError(msg)
-    gdf = gdf.to_crs(CRS.EQUAL_AREA)
+    gdf = gdf.to_crs(CRSES["equal_area"].to_string())
     gdf_buffered = gdf.copy()
     gdf_buffered["geometry"] = gdf["geometry"].buffer(1000)
 
@@ -398,7 +398,9 @@ def plot_heatmaps_with_table(
 def prepare_data_for_plotting(
     census_data: gpd.GeoDataFrame,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    census_data["area_sq_km"] = census_data.to_crs(CRS.EQUAL_AREA).area / 10**6
+    census_data["area_sq_km"] = (
+        census_data.to_crs(CRSES["equal_area"].to_string()).area / 10**6
+    )
     census_data["population_density"] = (
         census_data["population_total"] / census_data["area_sq_km"]
     )
@@ -408,7 +410,7 @@ def prepare_data_for_plotting(
 
     total_pop = census_data[census_data.admin_level == 0].population_total.iloc[0]
 
-    census_data = census_data.to_crs(CRS.WGS84)
+    census_data = census_data.to_crs(CRSES["wgs84"].to_string())
     summary_data = census_data.groupby("admin_level").agg(
         **{
             "Number of Units": ("shape_id", "count"),
@@ -486,9 +488,9 @@ def subset_iso3_year_list(
 
 
 @click.command()  # type: ignore[arg-type]
-@clio.with_iso3(allow_all=False)
-@clio.with_year(allow_all=False)
-@clio.with_output_directory(PEOPLE_PER_STRUCTURE_ROOT)
+@clio.with_iso3()
+@clio.with_year()
+@clio.with_output_directory(pmc.MODEL_ROOT)
 def plot_census_summary_task(
     iso3: str,
     year: str,
@@ -538,9 +540,9 @@ def merge_pdfs(pdf_root: str | Path, out_name: str) -> None:
 
 
 @click.command()  # type: ignore[arg-type]
-@clio.with_iso3()
-@clio.with_year()
-@clio.with_output_directory(PEOPLE_PER_STRUCTURE_ROOT)
+@clio.with_iso3(allow_all=True)
+@clio.with_year(allow_all=True)
+@clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def plot_census_summary(
     iso3: str,
@@ -555,7 +557,7 @@ def plot_census_summary(
 
     print(f"Launching {len(iso3_year_list)} plotting jobs.")
     jobmon.run_parallel(
-        runner="ppstask preprocess",
+        runner="pmrun preprocess",
         task_name="plot_census_summary",
         flat_node_args=(("iso3", "year"), iso3_year_list),
         task_args={

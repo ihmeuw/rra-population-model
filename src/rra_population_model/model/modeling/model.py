@@ -6,7 +6,7 @@ import lightning
 import rasterra as rt
 import torch
 from lightning.pytorch.utilities.types import STEP_OUTPUT
-from torch.optim import Adam, Optimizer  # type: ignore[attr-defined]
+from torch.optim import Adam, Optimizer
 
 from rra_population_model.model.modeling.datamodel import (
     Metric,

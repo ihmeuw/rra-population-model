@@ -23,7 +23,7 @@ from rra_population_model.model.modeling.datamodel import (
 
 def get_train_validate_test_splits(
     model_root: str | Path,
-    resolution: int,
+    resolution: str,
 ) -> dict[int, ModelPartition]:
     """Get the train/validate/test splits for the model.
 
@@ -67,7 +67,7 @@ def get_train_validate_test_splits(
 
 def _load_training_frame(
     model_root: str | Path,
-    resolution: int,
+    resolution: str,
 ) -> gpd.GeoDataFrame:
     """Load the training frame for the model.
 

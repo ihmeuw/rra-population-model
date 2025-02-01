@@ -24,19 +24,19 @@ def prepare_model_splits(modeling_frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     test_size = 0.2
     validate_size = 0.1
 
-    for i, (test_seed, validate_seed) in enumerate(seeds):
+    for i, (test_seed, validate_seed) in enumerate(seeds):  # type: ignore[misc]
         # 20% of the overall data is used for testing.
 
         train_tiles, test_tiles = train_test_split(
             modeling_frame.tile_key.tolist(),
             test_size=test_size,
-            random_state=test_seed,
+            random_state=test_seed,  # type: ignore[has-type]
         )
         # 10% of the overall data is used for validation/hyper-parameter tuning.
         train_tiles, validate_tiles = train_test_split(
             train_tiles,
             test_size=validate_size * (1 - test_size),
-            random_state=validate_seed,
+            random_state=validate_seed,  # type: ignore[has-type]
         )
 
         modeling_frame[f"split_{i}"] = "train"
@@ -47,7 +47,7 @@ def prepare_model_splits(modeling_frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def modeling_frame_main(
-    resolution: int,
+    resolution: str,
     building_density_dir: str,
     output_dir: str,
 ) -> None:
@@ -70,7 +70,7 @@ def modeling_frame_main(
 @clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def modeling_frame(
-    resolution: int,
+    resolution: str,
     building_density_dir: str,
     output_dir: str,
 ) -> None:

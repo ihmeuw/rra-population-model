@@ -18,8 +18,8 @@ from rra_tools.cli_tools import (
     with_queue,
     with_verbose,
 )
-from rra_population_model import constants as pmc
 
+from rra_population_model import constants as pmc
 
 _T = TypeVar("_T")
 _P = ParamSpec("_P")
@@ -67,6 +67,7 @@ def with_year(
         help="Year to run.",
     )
 
+
 def with_time_point(
     choices: Collection[str] = pmc.ALL_TIME_POINTS,
     *,
@@ -91,6 +92,7 @@ def with_block_key() -> ClickOption[_P, _T]:
         help="Block key of block to run.",
     )
 
+
 def with_tile_key() -> ClickOption[_P, _T]:
     return click.option(
         "--tile-key",
@@ -99,6 +101,7 @@ def with_tile_key() -> ClickOption[_P, _T]:
         required=True,
         help="Tile key of tile to run.",
     )
+
 
 def with_model_name() -> ClickOption[_P, _T]:
     return click.option(
@@ -115,20 +118,20 @@ __all__ = [
     "ClickOption",
     "convert_choice",
     "process_choices",
+    "with_block_key",
     "with_choice",
     "with_debugger",
     "with_dry_run",
     "with_input_directory",
+    "with_iso3",
     "with_num_cores",
     "with_output_directory",
     "with_overwrite",
     "with_progress_bar",
     "with_queue",
-    "with_verbose",
     "with_resolution",
-    "with_time_point",
-    "with_block_key",
     "with_tile_key",
+    "with_time_point",
+    "with_verbose",
     "with_year",
-    "with_iso3",
 ]

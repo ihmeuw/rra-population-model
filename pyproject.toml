@@ -44,6 +44,9 @@ scikit-learn = "^1.6.0"
 pyarrow = "^18.1.0"
 torch = "^2.5.1"
 lightning = "^2.5.0.post0"
+scikit-image = "^0.25.1"
+pypdf2 = "^3.0.1"
+contextily = "^1.6.2"
 
 [tool.poetry.group.dev.dependencies]
 mkdocstrings = {version = "*", extras = ["python"]}
@@ -60,6 +63,9 @@ pytest-github-actions-annotate-failures = "*"
 pytest-cov = "*"
 python-kacl = "*"
 ruff = "*"
+pandas-stubs = "^2.2.3.241126"
+types-tqdm = "^4.67.0.20241221"
+types-pyyaml = "^6.0.12.20241230"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -143,17 +149,24 @@ exclude_lines = [
 # This is the global mypy configuration.
 # Avoid changing this!
 strict = true  # See all the enabled flags `mypy --help | grep -A 10 'Strict mode'`
-disallow_any_unimported = true
+disallow_any_unimported = false
 
 # If you need to ignore something for some specific module,
 # add overrides for them. Avoid changing the global config!
 # For example:
-# [[tool.mypy.overrides]]
-# module = [
-#  "my_unpyted_dependency1.*",
-#  "my_unpyted_dependency2.*"
-# ]
-# ignore_missing_imports = true
+[[tool.mypy.overrides]]
+module = [
+    "geopandas.*",
+    "shapely.*",
+    "seaborn.*",
+    "mpl_toolkits.*",
+    "rasterio.*",
+    "affine.*",
+    "scipy.*",
+    "sklearn.*",
+    "contextily.*",
+]
+ignore_missing_imports = true
 
 # [[tool.mypy.overrides]]
 # module = [

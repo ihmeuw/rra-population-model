@@ -1,14 +1,10 @@
-from ast import mod
-from ctypes import util
 import itertools
 from pathlib import Path
-from textwrap import fill
 
 import click
 import numpy as np
 import rasterra as rt
 from rra_tools import jobmon
-from shapely import buffer
 
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
@@ -40,7 +36,7 @@ def mosaic_tile(
             )
             tile = tile.reproject(
                 dst_crs=feature_metadata.working_crs,
-                dst_resolution=feature_metadata.resolution,
+                dst_resolution=float(feature_metadata.resolution),
                 resampling="average",
             )
             tiles.append(tile)
@@ -56,7 +52,7 @@ def mosaic_tile(
             tile._ndarray = tile._ndarray[:-1].copy()  # noqa: SLF001
             tile = tile.reproject(
                 dst_crs=feature_metadata.working_crs,
-                dst_resolution=feature_metadata.resolution,
+                dst_resolution=float(feature_metadata.resolution),
                 resampling="average",
             )
             tiles.append(tile)
@@ -71,7 +67,7 @@ def process_bd_feature(
     fill_time_points: list[str],
     bd_data: BuildingDensityData,
     pm_data: PopulationModelData,
-):
+) -> None:
     provider, in_measure, out_measure = feature_spec
     print(f"Processing {out_measure} for {provider}")
 
@@ -129,7 +125,9 @@ def process_bd_feature(
             )
 
 
-def get_allowed_and_fill_time_points(provider: str, time_point: str) -> tuple[bool, list[str]]:
+def get_allowed_and_fill_time_points(
+    provider: str, time_point: str
+) -> tuple[bool, list[str]]:
     allowed_time_points = {
         **pmc.MICROSOFT_TIME_POINTS,
         "ghsl_r2023a": pmc.ALL_TIME_POINTS,
@@ -140,9 +138,13 @@ def get_allowed_and_fill_time_points(provider: str, time_point: str) -> tuple[bo
         # Check if our time point is on the edge of the allowed time points,
         # and if so, add all prior or subsequent time points to the fill list.
         if time_point == allowed_time_points[0]:
-            fill_time_points = pmc.ALL_TIME_POINTS[:pmc.ALL_TIME_POINTS.index(time_point)]
+            fill_time_points = pmc.ALL_TIME_POINTS[
+                : pmc.ALL_TIME_POINTS.index(time_point)
+            ]
         elif time_point == allowed_time_points[-1]:
-            fill_time_points = pmc.ALL_TIME_POINTS[pmc.ALL_TIME_POINTS.index(time_point) + 1 :]
+            fill_time_points = pmc.ALL_TIME_POINTS[
+                pmc.ALL_TIME_POINTS.index(time_point) + 1 :
+            ]
         else:
             fill_time_points = []
     else:
@@ -162,7 +164,9 @@ def features_main(
     pm_data = PopulationModelData(model_root)
 
     print("Loading all feature metadata")
-    feature_metadata = utils.get_feature_metadata(pm_data, bd_data, resolution, block_key, time_point)
+    feature_metadata = utils.get_feature_metadata(
+        pm_data, bd_data, resolution, block_key, time_point
+    )
 
     providers_and_measures = [
         ("microsoft_v2", "density", "msftv2_density"),
@@ -187,12 +191,19 @@ def features_main(
                 pm_data=pm_data,
             )
 
-    allowed, fill_time_points = get_allowed_and_fill_time_points("ghsl_r2023a", time_point)
-    assert allowed and not fill_time_points, "GHSL r2023a should not need fill time points."
+    allowed, fill_time_points = get_allowed_and_fill_time_points(
+        "ghsl_r2023a", time_point
+    )
+    assert (  # noqa: PT018, S101
+        allowed and not fill_time_points
+    ), "GHSL r2023a should not need fill time points."
 
     print("Processing residential density")
     suffixes = ["", *[f"_{r}m" for r in pmc.FEATURE_AVERAGE_RADII]]
-    measures = [f"{m}{suffix}" for m, suffix in itertools.product(["density", "volume"], suffixes)]
+    measures = [
+        f"{m}{suffix}"
+        for m, suffix in itertools.product(["density", "volume"], suffixes)
+    ]
     for measure in measures:
         combined = pm_data.load_feature(
             feature_name=f"ghsl_{measure}",
@@ -238,9 +249,7 @@ def features_task(
     output_dir: str,
 ) -> None:
     """Build predictors for a given tile and time point."""
-    features_main(
-        block_key, time_point, resolution, building_density_dir, output_dir
-    )
+    features_main(block_key, time_point, resolution, building_density_dir, output_dir)
 
 
 @click.command()  # type: ignore[arg-type]
@@ -274,12 +283,12 @@ def features(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "8G",
+            "memory": "15G",
             "runtime": "15m",
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },
         runner="pmtask preprocess",
-        log_root=pm_data.features,
+        log_root=pm_data.log_dir("preprocess_features"),
         max_attempts=1,
     )

@@ -8,9 +8,9 @@ from rasterio.fill import fillnodata
 from rasterra._features import raster_geometry_mask
 from rra_tools import jobmon
 
-from rra_population_model.data import PopulationModelData, RRAPopulationData
-from rra_population_model import constants as pmc
 from rra_population_model import cli_options as clio
+from rra_population_model import constants as pmc
+from rra_population_model.data import PopulationModelData, RRAPopulationData
 
 
 def load_shape_population(pop_data: RRAPopulationData, iso3: str) -> gpd.GeoDataFrame:
@@ -111,7 +111,7 @@ def rake_itu_main(
         pred_total = np.nansum(prediction_array[block_mask])
         raking_factor[block_mask] = location_pop / pred_total
 
-    raked_arr = prediction_array * raking_factor
+    raked_arr = prediction_array * raking_factor  # type: ignore[operator]
     raked_arr[location_mask == 0] = np.nan
 
     raked_pop = rt.RasterArray(

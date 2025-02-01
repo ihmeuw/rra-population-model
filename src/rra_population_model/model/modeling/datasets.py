@@ -1,18 +1,19 @@
 """This module contains torch-compatible datasets for the people per structure model."""
 
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import lightning
 import numpy as np
 import pandas as pd
 import rasterra as rt
 import torch
 from rra_tools import parallel
-import geopandas as gpd
 from torch.utils.data import DataLoader, Dataset, default_collate
 
+from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.model.modeling.datamodel import (
     ModelSpecification,
@@ -22,8 +23,6 @@ from rra_population_model.model.modeling.datamodel import (
 from rra_population_model.model.modeling.splits import (
     get_train_validate_test_splits,
 )
-from rra_population_model import constants as pmc
-
 
 ##############
 # Shape data #
@@ -114,7 +113,7 @@ def load_shape_data(
 def load_pixel_data(
     tile_keys: list[TileID],
     model_root: str | Path,
-    resolution: int,
+    resolution: str,
     denominator: str,
     features: list[str],
     **parallel_kwargs: Any,
@@ -165,7 +164,7 @@ def load_pixel_data(
 
 
 def _load_tile_pixels(
-    tile_specification: tuple[TileID, str | Path, int, str, list[str]],
+    tile_specification: tuple[TileID, str | Path, str, str, list[str]],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load the pixel data for a given tile.
 
@@ -229,7 +228,7 @@ def _load_tile_pixels(
     }
     area_weights = pm_data.load_pixel_area_weights(tile.tile_key).set_index("pixel_id")
 
-    def extract(key: str) -> pd.Series:
+    def extract(key: str) -> pd.Series:  # type: ignore[type-arg]
         return pd.Series(tile_data[key].to_numpy().flatten(), name=key)
 
     occ_rate_threshold = 1e-3
@@ -353,7 +352,7 @@ class InferenceDataset(Dataset[dict[str, Any]]):
 
     def __init__(
         self,
-        resolution: int,
+        resolution: str,
         block_keys: list[str],
         time_point: str,
         denominator: str,

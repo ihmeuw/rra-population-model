@@ -1,7 +1,7 @@
-from typing import Any
 import itertools
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import click
 import geopandas as gpd
@@ -13,14 +13,13 @@ import shapely
 import tqdm
 from rra_tools import jobmon
 
-from rra_population_model.data import PopulationModelData
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
-
+from rra_population_model.data import PopulationModelData
 
 DENOMINATORS = [
-    "msftv2_density",
-    "msftv3_density",
+    # "msftv2_density",
+    # "msftv3_density",
     "msftv4_density",
     "ghsl_density",
     "ghsl_residential_density",
@@ -44,11 +43,15 @@ NEW_PIXEL_FEATURES = [
 
 
 def safe_divide(
-    a: npt.NDArray[np.floating[Any]] | pd.DataFrame, b: npt.NDArray[np.floating[Any]] | pd.DataFrame
+    a: npt.NDArray[np.floating[Any]] | pd.DataFrame,
+    b: npt.NDArray[np.floating[Any]] | pd.DataFrame,
 ) -> npt.NDArray[np.floating[Any]]:
     """Divide two arrays, but return 0 where both arrays are 0."""
 
-    if not np.issubdtype(a.dtype, np.floating) or not np.issubdtype(b.dtype, np.floating):
+    if not np.issubdtype(a.dtype, np.floating) or not np.issubdtype(  # type: ignore[arg-type]
+        b.dtype,  # type: ignore[arg-type]
+        np.floating,
+    ):
         msg = "Both arrays must be floating point."
         raise TypeError(msg)
 
@@ -144,7 +147,7 @@ def process_model_gdf(
     """
     min_density = 0.01
     pixel_area = model_gdf["pixel_area"].iloc[0]
-    min_admin_density = min_density * pixel_area    
+    min_admin_density = min_density * pixel_area
 
     model_gdf["admin_population_density"] = (
         model_gdf["admin_population"] / model_gdf["admin_area"]
@@ -210,7 +213,6 @@ def process_model_gdf(
 
         denominator_df.loc[mask, "admin_occupancy_rate"] = occupancy_rate[mask]
 
-
         denominator_df["admin_log_occupancy_rate"] = -1.0
         denominator_df.loc[mask, "admin_log_occupancy_rate"] = np.log(
             1 + denominator_df.loc[mask, "admin_occupancy_rate"]
@@ -236,7 +238,7 @@ def process_model_gdf(
         ]
 
         for measure in keep_measures:
-            model_gdf[f"{measure}_{denominator}"] = denominator_df[measure]        
+            model_gdf[f"{measure}_{denominator}"] = denominator_df[measure]
 
     for feature in features:
         model_gdf[f"admin_{feature}"] = (
@@ -337,8 +339,17 @@ def training_data_main(
         return
 
     print("Finding tile neighborhood")
+    try:
+        full_shape = admins.buffer(0).union_all()
+    except shapely.errors.GEOSException:
+        # Buffer usually fixes small topological errors, but
+        # for at least one tile it causes a GEOS exception.
+        # This should be investigated, but just going with something
+        # that appears to work for now.
+        full_shape = admins.union_all()
+
     tile_neighborhood = model_frame[
-        model_frame.intersects(admins.buffer(0).union_all())
+        model_frame.intersects(full_shape)
     ].tile_key.tolist()
 
     print("Loading model gdfs")
@@ -369,10 +380,10 @@ def training_data_main(
         for f in pm_data.list_features(resolution, block_key, time_point)
         if f not in EXCLUDE_FEATURES
     ]
-    
+
     model_gdf = process_model_gdf(model_gdf, features)
     admin_gdf = filter_to_admin_gdf(model_gdf, admins)
-    tile_gdf = model_gdf[model_gdf["tile_key"] == tile_key]    
+    tile_gdf = model_gdf[model_gdf["tile_key"] == tile_key]
 
     print("Calculating pixel area weights")
     pixel_area_weight = (
@@ -493,7 +504,7 @@ def training_data(
             "project": "proj_rapidresponse",
         },
         runner="pmtask preprocess",
-        max_attempts=3,
+        max_attempts=5,
     )
 
     if status != "D":

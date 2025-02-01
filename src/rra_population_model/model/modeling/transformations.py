@@ -294,27 +294,27 @@ class PixelLogPopulationDensityTransformation(PixelTransformation):
 class AdminTransformation(Transformation, abc.ABC):
     """A transformation for administrative unit-level data."""
 
-    def to_pixel_occupancy_rate(self, z: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+    def to_pixel_occupancy_rate(self, z: torch.Tensor) -> torch.Tensor:
         """Transform from a target to pixel-level occupancy rate."""
         msg = "Pixel transformations are not supported for admin data"
         raise NotImplementedError(msg)
 
-    def to_pixel_log_occupancy_rate(self, z: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+    def to_pixel_log_occupancy_rate(self, z: torch.Tensor) -> torch.Tensor:
         """Transform from a target to pixel-level log occupancy rate."""
         msg = "Pixel transformations are not supported for admin data"
         raise NotImplementedError(msg)
 
-    def to_pixel_population(self, z: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+    def to_pixel_population(self, z: torch.Tensor) -> torch.Tensor:
         """Transform from a target to pixel-level population."""
         msg = "Pixel transformations are not supported for admin data"
         raise NotImplementedError(msg)
 
-    def to_pixel_population_density(self, z: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+    def to_pixel_population_density(self, z: torch.Tensor) -> torch.Tensor:
         """Transform from a target to pixel-level population density."""
         msg = "Pixel transformations are not supported for admin data"
         raise NotImplementedError(msg)
 
-    def to_pixel_log_population_density(self, z: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+    def to_pixel_log_population_density(self, z: torch.Tensor) -> torch.Tensor:
         """Transform from a target to pixel-level log population density."""
         msg = "Pixel transformations are not supported for admin data"
         raise NotImplementedError(msg)

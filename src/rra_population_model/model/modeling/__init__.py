@@ -22,8 +22,6 @@ from rra_population_model.model.modeling.splits import (
 __all__ = [
     "InferenceDataModule",
     "InferenceDataset",
-    "load_pixel_data",
-    "load_shape_data",
     "ModelPartition",
     "ModelSpecification",
     "ModelSplit",
@@ -32,4 +30,6 @@ __all__ = [
     "PPSModel",
     "TileID",
     "get_train_validate_test_splits",
+    "load_pixel_data",
+    "load_shape_data",
 ]

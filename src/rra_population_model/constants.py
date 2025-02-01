@@ -1,9 +1,9 @@
 import itertools
-from pathlib import Path
-import pyproj
-
-from pydantic import BaseModel, model_validator
 import warnings
+from pathlib import Path
+
+import pyproj
+from pydantic import BaseModel, model_validator
 
 RRA_ROOT = Path("/mnt/team/rapidresponse/")
 RRA_CREDENTIALS_ROOT = RRA_ROOT / "priv" / "shared" / "credentials"
@@ -16,14 +16,19 @@ MODEL_ROOT = RRA_ROOT / "pub" / "population-model"
 RESOLUTIONS = ["40", "100", "250", "500", "1000"]
 
 FEATURE_AVERAGE_RADII = [
-    100, 500, 1000, 2500, 5000, 10000,
+    100,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
 ]
 
 GHSL_TIME_POINTS = [f"{y}q1" for y in range(1975, 2024)]
 MICROSOFT_TIME_POINTS = {
-    "microsoft_v2": [f"{y}q{q}" for q, y in itertools.product(range(1, 5), range(2018, 2024))][
-        :-1
-    ],
+    "microsoft_v2": [
+        f"{y}q{q}" for q, y in itertools.product(range(1, 5), range(2018, 2024))
+    ][:-1],
     "microsoft_v3": ["2023q3"],
     "microsoft_v4": ["2023q4"],
 }
@@ -59,7 +64,7 @@ class CRS(BaseModel):
                 msg = "code and proj_string must represent the same CRS."
                 raise ValueError(msg)
         return self
-    
+
     def to_string(self) -> str:
         if self.code:
             return self.code
@@ -69,8 +74,8 @@ class CRS(BaseModel):
         if self.code:
             return pyproj.CRS.from_user_input(self.code)
         return pyproj.CRS.from_user_input(self.proj_string)
-    
-    def __hash__(self):
+
+    def __hash__(self) -> int:
         return hash(self.name)
 
 

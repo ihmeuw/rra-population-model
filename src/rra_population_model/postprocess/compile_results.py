@@ -91,7 +91,7 @@ def compile_results_main(
 @clio.with_resolution()
 @click.option("--bx", type=int, required=True)
 @click.option("--by", type=int, required=True)
-@clio.with_time_point(pmc.ALL_TIME_POINTS)
+@clio.with_time_point(pmc.ANNUAL_TIME_POINTS)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(8)
 def compile_results_task(
@@ -183,7 +183,7 @@ def upsample_main(
 @clio.with_model_name()
 @clio.with_resolution()
 @with_spec_name()
-@clio.with_time_point(pmc.ALL_TIME_POINTS)
+@clio.with_time_point(pmc.ANNUAL_TIME_POINTS)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def upsample_task(
     model_name: str,
@@ -199,7 +199,7 @@ def upsample_task(
 @clio.with_model_name()
 @clio.with_resolution()
 @with_spec_name(allow_all=True)
-@clio.with_time_point(pmc.ALL_TIME_POINTS, allow_all=True)
+@clio.with_time_point([str(y) for y in range(1950, 1976)], allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(8)
 @clio.with_queue()

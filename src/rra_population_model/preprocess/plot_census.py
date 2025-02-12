@@ -450,7 +450,7 @@ def plot_census_summary_main(
         The directory where the final PDF will be saved.
     """
     pm_data = PopulationModelData(output_dir)
-    census_data = pm_data.load_admin_training_data(iso3, year)
+    census_data = pm_data.load_census_data(iso3, year)
     census_data, summary_data = prepare_data_for_plotting(census_data)
 
     output_root = pm_data.census_qc
@@ -552,7 +552,7 @@ def plot_census_summary(
 ) -> None:
     pm_data = PopulationModelData(output_dir)
 
-    iso3_year_list = pm_data.list_admin_training_data()
+    iso3_year_list = pm_data.list_census_data()
     iso3_year_list = subset_iso3_year_list(iso3_year_list, iso3, year)
 
     print(f"Launching {len(iso3_year_list)} plotting jobs.")

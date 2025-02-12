@@ -46,7 +46,6 @@ def with_iso3(
 ) -> ClickOption[_P, _T]:
     return with_choice(
         "iso3",
-        "l",
         allow_all=allow_all,
         choices=choices,
         help="ISO3 code of country to run.",

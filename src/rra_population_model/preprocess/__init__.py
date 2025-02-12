@@ -1,4 +1,4 @@
-from rra_population_model.preprocess.census_data import (
+from rra_population_model.preprocess.census_data.runner import (
     census_data,
     census_data_task,
 )

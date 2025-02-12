@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import geopandas as gpd
 import numpy as np
@@ -15,6 +15,11 @@ from rra_population_model import constants as pmc
 
 if TYPE_CHECKING:
     from rra_population_model.model.modeling.datamodel import ModelSpecification
+
+# Type aliases
+Polygon: TypeAlias = shapely.Polygon | shapely.MultiPolygon
+BBox: TypeAlias = tuple[float, float, float, float]
+Bounds: TypeAlias = BBox | Polygon
 
 
 class TileIndexInfo(BaseModel):
@@ -263,8 +268,11 @@ class PopulationModelData:
         mkdir(self.root, exist_ok=True)
         mkdir(self.logs, exist_ok=True)
 
+        mkdir(self.admin_inputs, exist_ok=True)
+        mkdir(self.census, exist_ok=True)
+        mkdir(self.itu_masks, exist_ok=True)
+
         mkdir(self.training_data, exist_ok=True)
-        mkdir(self.admin_training_data, exist_ok=True)
         mkdir(self.tile_training_data, exist_ok=True)
         mkdir(self.features, exist_ok=True)
 
@@ -278,7 +286,7 @@ class PopulationModelData:
         mkdir(self.raked_predictions, exist_ok=True)
 
         mkdir(self.itu, exist_ok=True)
-        mkdir(self.itu_masks, exist_ok=True)
+
         mkdir(self.itu_results, exist_ok=True)
 
     @property
@@ -293,36 +301,52 @@ class PopulationModelData:
         return self.logs / step_name
 
     @property
-    def training_data(self) -> Path:
-        return Path(self.root, "training_data")
+    def admin_inputs(self) -> Path:
+        return self.root / "admin-inputs"
 
     @property
-    def admin_training_data(self) -> Path:
-        return Path(self.training_data, "admin")
+    def census(self) -> Path:
+        return self.admin_inputs / "census"
 
-    def save_admin_training_data(
-        self, iso3: str, time_point: str, gdf: gpd.GeoDataFrame
-    ) -> None:
-        path = self.admin_training_data / f"{iso3}_{time_point}.parquet"
-        if path.exists():
-            path.unlink()
-        touch(path)
+    def census_path(self, iso3: str, year: str) -> Path:
+        return self.census / f"{iso3}_{year}.parquet"
+
+    def list_census_data(self) -> list[tuple[str, str]]:
+        census_data = []
+        for path in self.census.glob("*.parquet"):
+            iso3, year = path.stem.split("_")
+            census_data.append((iso3, year))
+        return census_data
+
+    def save_census_data(self, gdf: gpd.GeoDataFrame, iso3: str, year: str) -> None:
+        path = self.census_path(iso3, year)
+        touch(path, clobber=True)
         gdf.to_parquet(path, write_covering_bbox=True)
 
-    def list_admin_training_data(self) -> list[tuple[str, str]]:
-        return [
-            ("_".join(path.stem.split("_")[:-1]), path.stem.split("_")[-1])
-            for path in self.admin_training_data.glob("*.parquet")
-        ]
-
-    def load_admin_training_data(
-        self, iso3: str, time_point: str, bounds: shapely.Polygon | None = None
+    def load_census_data(
+        self, iso3: str, year: str, bounds: Bounds | None = None
     ) -> gpd.GeoDataFrame:
-        bbox = bounds.bounds if bounds else None
-        return gpd.read_parquet(
-            self.admin_training_data / f"{iso3}_{time_point}.parquet",
-            bbox=bbox,
-        )
+        bbox = bounds_to_bbox(bounds)
+        path = self.census_path(iso3, year)
+        return gpd.read_parquet(path, bbox=bbox)
+
+    @property
+    def itu_masks(self) -> Path:
+        return self.admin_inputs / "itu-masks"
+
+    def itu_mask_path(self, iso3: str) -> Path:
+        return self.itu_masks / f"{iso3}.tif"
+
+    def list_itu_iso3s(self) -> list[str]:
+        return [f.stem for f in self.itu_masks.glob("*")]
+
+    def load_itu_mask(self, iso3: str) -> rt.RasterArray:
+        path = self.itu_mask_path(iso3)
+        return rt.load_raster(path)
+
+    @property
+    def training_data(self) -> Path:
+        return Path(self.root, "training_data")
 
     @property
     def tile_training_data(self) -> Path:
@@ -663,16 +687,6 @@ class PopulationModelData:
         return Path(self.root, "itu")
 
     @property
-    def itu_masks(self) -> Path:
-        return self.itu / "inputs" / "rasters"
-
-    def list_itu_iso3s(self) -> list[str]:
-        return [f.stem for f in self.itu_masks.glob("*")]
-
-    def load_itu_mask(self, iso3: str) -> rt.RasterArray:
-        return rt.load_raster(self.itu_masks / f"{iso3}.tif")
-
-    @property
     def itu_results(self) -> Path:
         return self.itu / "results"
 
@@ -684,6 +698,19 @@ class PopulationModelData:
         out_path = self.itu_results / f"{resolution}m" / model_name / f"{iso3}.tif"
         mkdir(out_path.parent, exist_ok=True, parents=True)
         save_raster(raster, out_path)
+
+
+def bounds_to_bbox(bounds: Bounds | None) -> BBox | None:
+    if isinstance(bounds, Polygon):
+        bbox = bounds.bounds
+    elif isinstance(bounds, tuple):
+        bbox = bounds
+    elif bounds is None:
+        bbox = None
+    else:
+        msg = f"Invalid bounds type: {type(bounds)}"
+        raise TypeError(msg)
+    return bbox  # type: ignore[no-any-return]
 
 
 def save_raster(

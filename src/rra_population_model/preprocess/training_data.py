@@ -326,7 +326,7 @@ def training_data_main(
     print("Loading and compiling admin census data")
     admin_data = []
     for iso in iso3_list.split(","):
-        a = pm_data.load_admin_training_data(iso, year, tile_poly)
+        a = pm_data.load_census_data(iso, year, tile_poly)
         # Need to intersect again with the tile poly because we load based on the
         # intersection with the bounding box.
         a = a[(a.admin_level == a.admin_level.max()) & (a.intersects(tile_poly))]
@@ -445,7 +445,7 @@ def get_training_locations_and_years(
     pm_data: PopulationModelData,
 ) -> list[tuple[str, str, str]]:
     """Get the locations and years for which we have training data."""
-    available_census_years = pm_data.list_admin_training_data()  # noqa: F841
+    available_census_years = pm_data.list_census_data()  # noqa: F841
     return [
         ("MEX", "2020", "1"),
         ("USA", "2020", "1"),
@@ -472,7 +472,7 @@ def training_data(
     tile_keys_and_times = defaultdict(list)
     for iso3, year, quarter in training_census_years:
         print(f"Processing {iso3} {year}q{quarter}")
-        shape = pm_data.load_admin_training_data(iso3, year)
+        shape = pm_data.load_census_data(iso3, year)
         a1 = (
             shape.loc[shape.admin_level == 1]
             .explode(index_parts=True)

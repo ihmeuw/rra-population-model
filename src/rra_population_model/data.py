@@ -345,6 +345,42 @@ class PopulationModelData:
         return rt.load_raster(path)
 
     @property
+    def raking_inputs(self) -> Path:
+        return self.admin_inputs / "raking"
+
+    def raking_input_path(self, measure: str, version: str) -> Path:
+        return self.raking_inputs / f"{measure}_{version}.parquet"
+
+    def save_raking_data(
+        self, population: pd.DataFrame, shapes: gpd.GeoDataFrame, version: str
+    ) -> None:
+        population_path = self.raking_input_path("population", version)
+        touch(population_path, clobber=True)
+        population.to_parquet(population_path)
+
+        shapes_path = self.raking_input_path("shapes", version)
+        touch(shapes_path, clobber=True)
+        shapes.to_parquet(shapes_path)
+
+    def load_raking_data(self, version: str) -> tuple[pd.DataFrame, gpd.GeoDataFrame]:
+        population_path = self.raking_input_path("population", version)
+        shapes_path = self.raking_input_path("shapes", version)
+        population = pd.read_parquet(population_path)
+        shapes = gpd.read_parquet(shapes_path)
+        return population, shapes
+
+    @property
+    def gbd_raking_inputs(self) -> Path:
+        return self.raking_inputs / "gbd-inputs"
+
+    def gbd_raking_input_path(self, measure: str, version: str) -> Path:
+        return self.gbd_raking_inputs / f"{measure}_{version}.parquet"
+
+    def load_gbd_raking_input(self, measure: str, version: str) -> pd.DataFrame:
+        path = self.gbd_raking_input_path(measure, version)
+        return pd.read_parquet(path)
+
+    @property
     def training_data(self) -> Path:
         return Path(self.root, "training_data")
 

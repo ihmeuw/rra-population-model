@@ -99,6 +99,7 @@ ROOT/
         itu_masks/
             {ISO3}.tif
         raking/
+            gbd-inputs/
             {RAKING_KEY}_population.parquet
             {RAKING_KEY}_shapes.parquet
     modeling/

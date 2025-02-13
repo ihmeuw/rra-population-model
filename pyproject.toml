@@ -130,6 +130,9 @@ classmethod-decorators = [
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
+[tool.ruff.lint.flake8-unused-arguments]
+ignore-variadic-names = true
+
 [tool.pytest.ini_options]
 addopts = """\
     --cov rra_population_model \
@@ -152,6 +155,7 @@ strict = true  # See all the enabled flags `mypy --help | grep -A 10 'Strict mod
 disallow_any_unimported = false
 exclude = [
     "notebooks",
+    "scripts",
 ]
 
 # If you need to ignore something for some specific module,

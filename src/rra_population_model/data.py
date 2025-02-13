@@ -282,7 +282,6 @@ class PopulationModelData:
         mkdir(self.models, exist_ok=True)
         mkdir(self.predictions, exist_ok=True)
         mkdir(self.raking, exist_ok=True)
-        mkdir(self.raking_utility_data, exist_ok=True)
         mkdir(self.raked_predictions, exist_ok=True)
 
         mkdir(self.itu, exist_ok=True)
@@ -360,14 +359,17 @@ class PopulationModelData:
 
         shapes_path = self.raking_input_path("shapes", version)
         touch(shapes_path, clobber=True)
-        shapes.to_parquet(shapes_path)
+        shapes.to_parquet(shapes_path, write_covering_bbox=True)
 
-    def load_raking_data(self, version: str) -> tuple[pd.DataFrame, gpd.GeoDataFrame]:
-        population_path = self.raking_input_path("population", version)
-        shapes_path = self.raking_input_path("shapes", version)
-        population = pd.read_parquet(population_path)
-        shapes = gpd.read_parquet(shapes_path)
-        return population, shapes
+    def load_raking_population(self, version: str) -> pd.DataFrame:
+        path = self.raking_input_path("population", version)
+        return pd.read_parquet(path)
+
+    def load_raking_shapes(
+        self, version: str, bbox: shapely.Polygon | None = None
+    ) -> gpd.GeoDataFrame:
+        path = self.raking_input_path("shapes", version)
+        return gpd.read_parquet(path, bbox=bbox)
 
     @property
     def gbd_raking_inputs(self) -> Path:
@@ -635,20 +637,6 @@ class PopulationModelData:
     @property
     def raking(self) -> Path:
         return Path(self.root, "raking")
-
-    @property
-    def raking_utility_data(self) -> Path:
-        return self.raking / "utility_data"
-
-    def load_raking_population(self) -> pd.DataFrame:
-        path = self.raking_utility_data / "raking_population.parquet"
-        return pd.read_parquet(path)
-
-    def load_raking_shapes(
-        self, bbox: shapely.Polygon | None = None
-    ) -> gpd.GeoDataFrame:
-        path = self.raking_utility_data / "raking_shapes.parquet"
-        return gpd.read_parquet(path, bbox=bbox)
 
     @property
     def raked_predictions(self) -> Path:

@@ -21,9 +21,9 @@ def load_admin_populations(
     pm_data: PopulationModelData,
     time_point: str,
 ) -> gpd.GeoDataFrame:
-    all_pop = pm_data.load_raking_population().set_index(["year_id", "location_id"])[
-        "population"
-    ]
+    raking_pop = pm_data.load_raking_population(version="fhs_2021_wpp_2022")
+    all_pop = raking_pop.set_index(["year_id", "location_id"])["population"]
+
     # Interpolate the time point population
     if "q" in time_point:
         year, quarter = (int(s) for s in time_point.split("q"))
@@ -38,7 +38,7 @@ def load_admin_populations(
         year = int(time_point)
         pop = all_pop.loc[year]
 
-    admins = pm_data.load_raking_shapes()
+    admins = pm_data.load_raking_shapes(version="fhs_2021_wpp_2022")
     pop = admins[["location_id", "geometry"]].merge(pop, on="location_id")
     return pop
 
@@ -146,7 +146,7 @@ def make_raking_factors_main(
     )
     print("Saving")
     out_path = (
-        pm_data.raking_utility_data
+        pm_data.raking_utility_data  # type: ignore[attr-defined]
         / resolution
         / model_name
         / f"raking_factors_{time_point}.parquet"
@@ -196,7 +196,7 @@ def rake_main(
 
     print("Loading raking factors")
     raking_data = gpd.read_parquet(
-        pm_data.raking_utility_data
+        pm_data.raking_utility_data  # type: ignore[attr-defined]
         / resolution
         / model_name
         / f"raking_factors_{time_point}.parquet",
@@ -206,7 +206,9 @@ def rake_main(
     print("Loading raking shapes")
     bounds = model_frame[model_frame.block_key == block_key].total_bounds
     tile_poly = shapely.box(*bounds)
-    shapes = pm_data.load_raking_shapes(bbox=tile_poly.bounds)
+    shapes = pm_data.load_raking_shapes(
+        version="fhs_2021_wpp_2022", bbox=tile_poly.bounds
+    )
 
     print("Raking")
     if shapes.empty:

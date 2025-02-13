@@ -9,12 +9,16 @@ This script needs to be run from a cluster node with access to the J-drive.
 """
 
 from pathlib import Path
+from typing import Any
 
 import click
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
-from db_queries import get_location_metadata, get_population
+from db_queries import (  # type: ignore[import-not-found]
+    get_location_metadata,
+    get_population,
+)
 from rra_tools.shell_tools import mkdir, touch
 
 GBD_RELEASE_ID = 9
@@ -29,7 +33,7 @@ MODEL_ROOT = Path("/mnt/team/rapidresponse/pub/population-model")
 
 
 def load_gbd_populations(location_set_id: int, release_id: int) -> pd.DataFrame:
-    return (
+    return (  # type: ignore[no-any-return]
         get_population(
             release_id=release_id,
             location_id="all",
@@ -43,7 +47,7 @@ def load_gbd_populations(location_set_id: int, release_id: int) -> pd.DataFrame:
     )
 
 
-def load_fhs_population(*args, **kwargs) -> pd.DataFrame:
+def load_fhs_population(*args: Any, **kwargs: Any) -> pd.DataFrame:
     pop_fhs_path = "/mnt/share/forecasting/data/9/future/population/20241105_migration_subnat_update_by_age/summary/summary.nc"
     return (
         xr.open_dataset(pop_fhs_path)
@@ -58,7 +62,7 @@ def load_fhs_population(*args, **kwargs) -> pd.DataFrame:
     )
 
 
-def load_gbd_shapes(path: str | Path) -> gpd.GeoDataFrame:
+def load_gbd_shapes(path: Path) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path)
 
     column_map = {
@@ -76,7 +80,7 @@ def load_gbd_shapes(path: str | Path) -> gpd.GeoDataFrame:
     return gdf
 
 
-def load_lsae_shapes(path: str | Path) -> gpd.GeoDataFrame:
+def load_lsae_shapes(path: Path) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path)
     admin_level = path.stem[-1]
     column_map = {
@@ -91,7 +95,7 @@ def load_lsae_shapes(path: str | Path) -> gpd.GeoDataFrame:
 
 @click.command()
 @click.option("--model-root", type=click.Path(exists=True), default=MODEL_ROOT)
-def cache_raking_data(model_root) -> None:
+def cache_raking_data(model_root: str) -> None:
     data_out_root = Path(model_root) / "admin-inputs" / "raking" / "gbd-inputs"
     mkdir(data_out_root, exist_ok=True, parents=True)
 
@@ -115,7 +119,7 @@ def cache_raking_data(model_root) -> None:
             "Year": "year_id",
             "Type": "type",
         }
-        wpp = wpp.rename(columns=col_map).loc[:, col_map.values()]
+        wpp = wpp.rename(columns=col_map).loc[:, col_map.values()]  # type: ignore[index]
         wpp = (
             wpp.loc[wpp["type"] == "Country/Area", :]
             .reset_index(drop=True)
@@ -150,13 +154,17 @@ def cache_raking_data(model_root) -> None:
     }
     for name, (loader, args) in pop_loaders.items():
         print(f"Caching population for {name}")
-        pop = loader(*args)
+        pop = loader(*args)  # type: ignore[operator]
         out_path = data_out_root / f"population_{name}.parquet"
         touch(out_path, clobber=True)
         pop.to_parquet(out_path)
 
-    gbd_2021_shape_path = "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2021/master/shapefiles/GBD2021_analysis_final_loc_set_22.shp"
-    gbd_2023_shape_path = "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2023/master/shapefiles/GBD2023_analysis_final_loc_set_22.shp"
+    gbd_2021_shape_path = Path(
+        "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2021/master/shapefiles/GBD2021_analysis_final_loc_set_22.shp"
+    )
+    gbd_2023_shape_path = Path(
+        "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2023/master/shapefiles/GBD2023_analysis_final_loc_set_22.shp"
+    )
     lsae_shape_root = Path("/home/j/WORK/11_geospatial/admin_shapefiles/current/")
     shape_loaders = {
         "gbd_2021": (load_gbd_shapes, gbd_2021_shape_path),

@@ -155,7 +155,6 @@ strict = true  # See all the enabled flags `mypy --help | grep -A 10 'Strict mod
 disallow_any_unimported = false
 exclude = [
     "notebooks",
-    "scripts",
 ]
 
 # If you need to ignore something for some specific module,

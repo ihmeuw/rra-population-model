@@ -24,7 +24,7 @@ Bounds: TypeAlias = BBox | Polygon
 
 class TileIndexInfo(BaseModel):
     tile_size: int
-    tile_resolution: str
+    tile_resolution: int
     block_size: int
     crs: str
 
@@ -244,7 +244,7 @@ class RRAPopulationData:
 
 class ModelFrameInfo(BaseModel):
     tile_size: int
-    tile_resolution: str
+    tile_resolution: int
     block_size: int
     crs: str
 
@@ -271,6 +271,10 @@ class PopulationModelData:
         mkdir(self.admin_inputs, exist_ok=True)
         mkdir(self.census, exist_ok=True)
         mkdir(self.itu_masks, exist_ok=True)
+        mkdir(self.raking_inputs, exist_ok=True)
+        mkdir(self.gbd_raking_inputs, exist_ok=True)
+
+        mkdir(self.modeling, exist_ok=True)
 
         mkdir(self.training_data, exist_ok=True)
         mkdir(self.tile_training_data, exist_ok=True)
@@ -383,6 +387,45 @@ class PopulationModelData:
         return pd.read_parquet(path)
 
     @property
+    def modeling(self) -> Path:
+        return self.root / "modeling"
+
+    def resolution_root(self, resolution: str) -> Path:
+        return self.modeling / f"{resolution}m"
+
+    def modeling_frame_path(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / self._modeling_frame_filename
+
+    def modeling_frame_info_path(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / self._modeling_frame_info_filename
+
+    def save_modeling_frame(
+        self,
+        resolution: str,
+        model_frame: gpd.GeoDataFrame,
+        modeling_frame_info: ModelFrameInfo,
+    ) -> None:
+        modeling_frame_path = self.modeling_frame_path(resolution)
+        mkdir(modeling_frame_path.parent, exist_ok=True)
+        touch(modeling_frame_path, clobber=True)
+        model_frame.to_parquet(modeling_frame_path)
+
+        modeling_frame_info_path = self.modeling_frame_info_path(resolution)
+        touch(modeling_frame_info_path, clobber=True)
+        with modeling_frame_info_path.open("w") as f:
+            yaml.dump(modeling_frame_info.model_dump(), f)
+
+    def load_modeling_frame(self, resolution: str) -> gpd.GeoDataFrame:
+        path = self.modeling_frame_path(resolution)
+        return gpd.read_parquet(path)
+
+    def load_modeling_frame_info(self, resolution: str) -> ModelFrameInfo:
+        path = self.modeling_frame_info_path(resolution)
+        with path.open() as f:
+            info = yaml.safe_load(f)
+        return ModelFrameInfo(**info)
+
+    @property
     def training_data(self) -> Path:
         return Path(self.root, "training_data")
 
@@ -461,32 +504,6 @@ class PopulationModelData:
     @property
     def features(self) -> Path:
         return self.root / "features"
-
-    def save_modeling_frame(
-        self,
-        resolution: str,
-        model_frame: gpd.GeoDataFrame,
-        modeling_frame_info: ModelFrameInfo,
-    ) -> None:
-        root = self.features / f"{resolution}m"
-        mkdir(root, exist_ok=True)
-        modeling_frame_path = root / self._modeling_frame_filename
-        touch(modeling_frame_path, clobber=True)
-        model_frame.to_parquet(modeling_frame_path)
-        modeling_frame_info_path = root / self._modeling_frame_info_filename
-        touch(modeling_frame_info_path, clobber=True)
-        with modeling_frame_info_path.open("w") as f:
-            yaml.dump(modeling_frame_info.model_dump(), f)
-
-    def load_modeling_frame(self, resolution: str) -> gpd.GeoDataFrame:
-        path = self.features / f"{resolution}m" / self._modeling_frame_filename
-        return gpd.read_parquet(path)
-
-    def load_modeling_frame_info(self, resolution: str) -> ModelFrameInfo:
-        path = self.features / f"{resolution}m" / self._modeling_frame_info_filename
-        with path.open() as f:
-            info = yaml.safe_load(f)
-        return ModelFrameInfo(**info)
 
     def feature_path(
         self,

@@ -2,6 +2,7 @@ import click
 
 from rra_population_model import (
     model,
+    model_prep,
     postprocess,
     preprocess,
 )
@@ -17,7 +18,7 @@ def pmtask() -> None:
     """Run an individual modeling task in the population modeling pipeline."""
 
 
-for module in [preprocess, model, postprocess]:
+for module in [preprocess, model_prep, model, postprocess]:
     runners = getattr(module, "RUNNERS", {})
     task_runners = getattr(module, "TASK_RUNNERS", {})
 

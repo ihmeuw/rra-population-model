@@ -6,9 +6,6 @@ from rra_population_model.preprocess.features.runner import (
     features,
     features_task,
 )
-from rra_population_model.preprocess.modeling_frame import (
-    modeling_frame,
-)
 from rra_population_model.preprocess.plot_census import (
     plot_census_summary,
     plot_census_summary_task,
@@ -31,7 +28,6 @@ from rra_population_model.preprocess.training_data import (
 
 RUNNERS = {
     "plot_census_summary": plot_census_summary,
-    "modeling_frame": modeling_frame,
     "features": features,
     "census_data": census_data,
     "raking_data": raking_data,
@@ -42,7 +38,6 @@ RUNNERS = {
 
 TASK_RUNNERS = {
     "plot_census_summary": plot_census_summary_task,
-    "modeling_frame": modeling_frame,
     "features": features_task,
     "census_data": census_data_task,
     "raking_data": raking_data,

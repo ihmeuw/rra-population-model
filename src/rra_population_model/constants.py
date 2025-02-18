@@ -1,6 +1,7 @@
-import itertools
 import warnings
+from enum import StrEnum
 from pathlib import Path
+from typing import Literal, Self
 
 import pyproj
 from pydantic import BaseModel, model_validator
@@ -13,7 +14,89 @@ BUILDING_DENSITY_ROOT = RRA_ROOT / "pub" / "building-density"
 POPULATION_DATA_ROOT = RRA_ROOT / "pub" / "population" / "data" / "02-processed-data"
 MODEL_ROOT = RRA_ROOT / "pub" / "population-model"
 
-RESOLUTIONS = ["40", "100", "250", "500", "1000"]
+
+class RESOLUTIONS(StrEnum):
+    r40 = "40"
+    r100 = "100"
+
+    @classmethod
+    def to_list(cls) -> list[str]:
+        return [r.value for r in cls]
+
+
+class BuiltVersion(BaseModel):
+    provider: Literal["ghsl", "microsoft"]
+    version: Literal["v4", "r2023a"]
+    time_points: list[str]
+    measures: list[str]
+
+    @property
+    def name(self) -> str:
+        return f"{self.provider}_{self.version}"
+
+    @property
+    def time_points_float(self) -> list[float]:
+        """Convert time points to floats."""
+        out = []
+        for tp in self.time_points:
+            year, quarter = tp.split("q")
+            out.append(float(year) + (float(quarter) - 1) / 4)
+        return out
+
+    @model_validator(mode="after")
+    def validate_version(self) -> Self:
+        version_map = {
+            "microsoft": ["v4"],
+            "ghsl": ["r2023a"],
+        }
+        allowed_version = version_map[self.provider]
+        if self.version not in allowed_version:
+            msg = f"Version {self.version} is not allowed for provider {self.provider}."
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_measures(self) -> Self:
+        allowed_measures = {
+            "ghsl": [
+                "density",
+                "volume",
+                "nonresidential_density",
+                "nonresidential_volume",
+            ],
+            "microsoft": ["density"],
+        }[self.provider]
+        extra = set(self.measures) - set(allowed_measures)
+        if extra:
+            msg = f"Measures {extra} are not allowed for provider {self.provider}."
+            raise ValueError(msg)
+        missing = set(allowed_measures) - set(self.measures)
+        if missing:
+            msg = f"Measures {missing} are required for provider {self.provider}."
+            raise ValueError(msg)
+        return self
+
+
+BUILT_VERSIONS = {
+    "ghsl_r2023a": BuiltVersion(
+        provider="ghsl",
+        version="r2023a",
+        time_points=[f"{y}q1" for y in range(1975, 2030, 5)],
+        measures=[
+            "density",
+            "volume",
+            "nonresidential_density",
+            "nonresidential_volume",
+        ],
+    ),
+    "microsoft_v4": BuiltVersion(
+        provider="microsoft",
+        version="v4",
+        time_points=["2023q4"],
+        measures=["density"],
+    ),
+}
+
 
 FEATURE_AVERAGE_RADII = [
     100,
@@ -24,19 +107,10 @@ FEATURE_AVERAGE_RADII = [
     10000,
 ]
 
-GHSL_TIME_POINTS = [f"{y}q1" for y in range(1975, 2024)]
-MICROSOFT_TIME_POINTS = {
-    "microsoft_v2": [
-        f"{y}q{q}" for q, y in itertools.product(range(1, 5), range(2018, 2024))
-    ][:-1],
-    "microsoft_v3": ["2023q3"],
-    "microsoft_v4": ["2023q4"],
-}
 ALL_TIME_POINTS = sorted(
-    set(GHSL_TIME_POINTS) | set().union(*MICROSOFT_TIME_POINTS.values())
+    set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
+    | {f"{y}q1" for y in range(1975, 2025)}
 )
-
-ANNUAL_TIME_POINTS = [f"{y}" for y in range(1950, 2101)]
 
 
 class CRS(BaseModel):

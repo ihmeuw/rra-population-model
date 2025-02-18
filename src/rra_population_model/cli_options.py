@@ -26,7 +26,7 @@ _P = ParamSpec("_P")
 
 
 def with_resolution(
-    choices: Collection[str] = pmc.RESOLUTIONS,
+    choices: Collection[str] = pmc.RESOLUTIONS.to_list(),
     *,
     allow_all: bool = False,
 ) -> ClickOption[_P, _T]:

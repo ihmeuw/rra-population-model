@@ -275,10 +275,12 @@ class PopulationModelData:
         mkdir(self.gbd_raking_inputs, exist_ok=True)
 
         mkdir(self.modeling, exist_ok=True)
+        for resolution in pmc.RESOLUTIONS.to_list():
+            mkdir(self.resolution_root(resolution), exist_ok=True)
+            mkdir(self.features_root(resolution), exist_ok=True)
 
         mkdir(self.training_data, exist_ok=True)
         mkdir(self.tile_training_data, exist_ok=True)
-        mkdir(self.features, exist_ok=True)
 
         mkdir(self.input_qc, exist_ok=True)
         mkdir(self.census_qc, exist_ok=True)
@@ -425,6 +427,84 @@ class PopulationModelData:
             info = yaml.safe_load(f)
         return ModelFrameInfo(**info)
 
+    def features_root(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / "features"
+
+    def feature_path(
+        self,
+        resolution: str,
+        block_key: str,
+        feature_name: str,
+        time_point: str,
+    ) -> Path:
+        return (
+            self.features_root(resolution)
+            / time_point
+            / block_key
+            / f"{feature_name}.tif"
+        )
+
+    def link_feature(
+        self,
+        resolution: str,
+        block_key: str,
+        feature_name: str,
+        time_point: str,
+        source_path: Path,
+    ) -> None:
+        dest = self.feature_path(resolution, block_key, feature_name, time_point)
+        mkdir(dest.parent, parents=True, exist_ok=True)
+        if dest.exists():
+            dest.unlink()
+        dest.symlink_to(source_path)
+
+    def save_feature(
+        self,
+        feature_raster: rt.RasterArray,
+        resolution: str,
+        block_key: str,
+        feature_name: str,
+        time_point: str,
+    ) -> None:
+        out_path = self.feature_path(resolution, block_key, feature_name, time_point)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        touch(out_path, clobber=True)
+        save_raster(feature_raster, out_path)
+
+    def feature_exists(
+        self,
+        resolution: str,
+        block_key: str,
+        feature_name: str,
+        time_point: str,
+    ) -> bool:
+        path = self.feature_path(resolution, block_key, feature_name, time_point)
+        return path.exists()
+
+    def list_features(
+        self, resolution: str, block_key: str, time_point: str
+    ) -> list[str]:
+        block_dir = self.feature_path(resolution, block_key, "", time_point).parent
+        return [
+            f.stem.split(f"_{time_point}")[0]
+            for f in block_dir.glob(f"*_{time_point}.tif")
+        ]
+
+    def load_feature(
+        self,
+        resolution: str,
+        block_key: str,
+        feature_name: str,
+        time_point: str,
+        subset_bounds: shapely.Polygon | None = None,
+    ) -> rt.RasterArray:
+        load_name = feature_name[4:] if feature_name[:3] == "log" else feature_name
+        path = self.feature_path(resolution, block_key, load_name, time_point)
+        feature = rt.load_raster(path, subset_bounds)
+        if feature_name[:3] == "log":
+            feature = np.log(1 + feature)
+        return feature
+
     @property
     def training_data(self) -> Path:
         return Path(self.root, "training_data")
@@ -500,85 +580,6 @@ class PopulationModelData:
     ) -> rt.RasterArray:
         path = self.tile_training_data / tile_key / f"{measure}.tif"
         return rt.load_raster(path)
-
-    @property
-    def features(self) -> Path:
-        return self.root / "features"
-
-    def feature_path(
-        self,
-        resolution: str,
-        block_key: str,
-        feature_name: str,
-        time_point: str,
-    ) -> Path:
-        return (
-            self.features
-            / f"{resolution}m"
-            / block_key
-            / f"{feature_name}_{time_point}.tif"
-        )
-
-    def link_feature(
-        self,
-        resolution: str,
-        block_key: str,
-        feature_name: str,
-        time_point: str,
-        source_path: Path,
-    ) -> None:
-        dest = self.feature_path(resolution, block_key, feature_name, time_point)
-        mkdir(dest.parent, parents=True, exist_ok=True)
-        if dest.exists():
-            dest.unlink()
-        dest.symlink_to(source_path)
-
-    def save_feature(
-        self,
-        feature_raster: rt.RasterArray,
-        resolution: str,
-        block_key: str,
-        feature_name: str,
-        time_point: str,
-    ) -> None:
-        out_path = self.feature_path(resolution, block_key, feature_name, time_point)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        touch(out_path, clobber=True)
-        save_raster(feature_raster, out_path)
-
-    def feature_exists(
-        self,
-        resolution: str,
-        block_key: str,
-        feature_name: str,
-        time_point: str,
-    ) -> bool:
-        path = self.feature_path(resolution, block_key, feature_name, time_point)
-        return path.exists()
-
-    def list_features(
-        self, resolution: str, block_key: str, time_point: str
-    ) -> list[str]:
-        block_dir = self.feature_path(resolution, block_key, "", time_point).parent
-        return [
-            f.stem.split(f"_{time_point}")[0]
-            for f in block_dir.glob(f"*_{time_point}.tif")
-        ]
-
-    def load_feature(
-        self,
-        resolution: str,
-        block_key: str,
-        feature_name: str,
-        time_point: str,
-        subset_bounds: shapely.Polygon | None = None,
-    ) -> rt.RasterArray:
-        load_name = feature_name[4:] if feature_name[:3] == "log" else feature_name
-        path = self.feature_path(resolution, block_key, load_name, time_point)
-        feature = rt.load_raster(path, subset_bounds)
-        if feature_name[:3] == "log":
-            feature = np.log(1 + feature)
-        return feature
 
     @property
     def input_qc(self) -> Path:

@@ -30,7 +30,7 @@ def modeling_frame_main(
 
 
 @click.command()  # type: ignore[arg-type]
-@clio.with_resolution(pmc.RESOLUTIONS)
+@clio.with_resolution()
 @clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def modeling_frame(

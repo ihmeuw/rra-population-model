@@ -249,7 +249,7 @@ def rake_main(
 @clio.with_resolution()
 @clio.with_model_name()
 @clio.with_block_key()
-@clio.with_time_point(choices=pmc.ANNUAL_TIME_POINTS)
+@clio.with_time_point()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def rake_task(
     resolution: str,
@@ -264,7 +264,7 @@ def rake_task(
 @click.command()  # type: ignore[arg-type]
 @clio.with_resolution(allow_all=False)
 @clio.with_model_name()
-@clio.with_time_point([str(y) for y in range(1950, 1976)], allow_all=True)
+@clio.with_time_point(allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_queue()

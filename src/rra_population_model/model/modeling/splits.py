@@ -92,6 +92,6 @@ def _load_training_frame(
     """
     pm_data = PopulationModelData(model_root)
     modeling_frame = pm_data.load_modeling_frame(resolution)
-    training_tiles = pm_data.list_tile_training_data()
+    training_tiles = pm_data.list_tile_training_data(resolution)
     training_frame = modeling_frame[modeling_frame.tile_key.isin(training_tiles)]
     return training_frame

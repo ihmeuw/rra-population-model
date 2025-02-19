@@ -17,16 +17,11 @@ from rra_population_model.preprocess.summarize_training_data import (
     summarize_training_data,
     summarize_training_data_task,
 )
-from rra_population_model.preprocess.training_data import (
-    training_data,
-    training_data_task,
-)
 
 RUNNERS = {
     "plot_census_summary": plot_census_summary,
     "census_data": census_data,
     "raking_data": raking_data,
-    "training_data": training_data,
     "summarize_training_data": summarize_training_data,
     "plot_training_data": plot_training_data,
 }
@@ -35,7 +30,6 @@ TASK_RUNNERS = {
     "plot_census_summary": plot_census_summary_task,
     "census_data": census_data_task,
     "raking_data": raking_data,
-    "training_data": training_data_task,
     "summarize_training_data": summarize_training_data_task,
     "plot_training_data": plot_training_data_task,
 }

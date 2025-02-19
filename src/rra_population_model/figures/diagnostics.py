@@ -24,7 +24,7 @@ def plot_area_distribution() -> None:
     pixel size.
     """
     pm_data = PopulationModelData()
-    gdf = gpd.read_parquet(pm_data.training_data / "all.parquet")
+    gdf = gpd.read_parquet(pm_data.training_data / "all.parquet")  # type: ignore[attr-defined]
     area = gdf.admin_area
     lower = area < area.quantile(0.50)
     fig, ax = plt.subplots(figsize=(5, 3))
@@ -91,7 +91,7 @@ def compare_kenya_and_iceland_resolution() -> None:
 
 def examine_impact_of_throwing_out_multi_tile_admins() -> None:
     pm_data = PopulationModelData()
-    admin_data = pm_data.load_people_per_structure()
+    admin_data = pm_data.load_people_per_structure(resolution="100")
     admin_data["admin_is_multi_tile"] = (
         admin_data.groupby("admin_id")["tile_key"].transform("nunique") > 1
     )

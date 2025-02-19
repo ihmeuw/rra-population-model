@@ -278,9 +278,8 @@ class PopulationModelData:
         for resolution in pmc.RESOLUTIONS.to_list():
             mkdir(self.resolution_root(resolution), exist_ok=True)
             mkdir(self.features_root(resolution), exist_ok=True)
-
-        mkdir(self.training_data, exist_ok=True)
-        mkdir(self.tile_training_data, exist_ok=True)
+            mkdir(self.training_data_root(resolution), exist_ok=True)
+            mkdir(self.tile_training_data_root(resolution), exist_ok=True)
 
         mkdir(self.input_qc, exist_ok=True)
         mkdir(self.census_qc, exist_ok=True)
@@ -319,7 +318,9 @@ class PopulationModelData:
     def list_census_data(self) -> list[tuple[str, str]]:
         census_data = []
         for path in self.census.glob("*.parquet"):
-            iso3, year = path.stem.split("_")
+            # Some iso3 codes have underscores (e.g. GBR subnats)
+            *iso3_parts, year = path.stem.split("_")
+            iso3 = "_".join(iso3_parts)
             census_data.append((iso3, year))
         return census_data
 
@@ -485,10 +486,7 @@ class PopulationModelData:
         self, resolution: str, block_key: str, time_point: str
     ) -> list[str]:
         block_dir = self.feature_path(resolution, block_key, "", time_point).parent
-        return [
-            f.stem.split(f"_{time_point}")[0]
-            for f in block_dir.glob(f"*_{time_point}.tif")
-        ]
+        return [p.stem for p in block_dir.glob("*.tif")]
 
     def load_feature(
         self,
@@ -505,80 +503,83 @@ class PopulationModelData:
             feature = np.log(1 + feature)
         return feature
 
-    @property
-    def training_data(self) -> Path:
-        return Path(self.root, "training_data")
+    def training_data_root(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / "training-data"
 
-    @property
-    def tile_training_data(self) -> Path:
-        return self.training_data / "tiles"
+    def tile_training_data_root(self, resolution: str) -> Path:
+        return self.training_data_root(resolution) / "tiles"
 
     def save_tile_training_data(
         self,
+        resolution: str,
         tile_key: str,
         tile_gdf: gpd.GeoDataFrame,
         tile_area_weights: gpd.GeoDataFrame,
         tile_rasters: dict[str, rt.RasterArray],
     ) -> None:
-        root = self.tile_training_data / tile_key
+        root = self.tile_training_data_root(resolution) / tile_key
         mkdir(root, exist_ok=True)
-        for p in root.glob("*"):
-            p.unlink()
 
         gdf_path = root / "people_per_structure.parquet"
-        touch(gdf_path)
+        touch(gdf_path, clobber=True)
         tile_gdf.to_parquet(gdf_path)
 
         paw_path = root / "pixel_area_weights.parquet"
-        touch(paw_path)
+        touch(paw_path, clobber=True)
         tile_area_weights.to_parquet(paw_path)
 
         for measure, raster in tile_rasters.items():
             raster_path = root / f"{measure}.tif"
-            touch(raster_path)
+            touch(raster_path, clobber=True)
             save_raster(raster, raster_path)
 
     def save_summary_training_data(
         self,
+        resolution: str,
         people_per_structure: gpd.GeoDataFrame,
         pixel_area_weights: gpd.GeoDataFrame,
     ) -> None:
-        root = self.tile_training_data
+        root = self.training_data_root(resolution)
         pps_path = root / "people_per_structure.parquet"
-        if pps_path.exists():
-            pps_path.unlink()
-        touch(pps_path)
+        touch(pps_path, clobber=True)
         people_per_structure.to_parquet(pps_path)
 
         paw_path = root / "pixel_area_weights.parquet"
-        if paw_path.exists():
-            paw_path.unlink()
-        touch(paw_path, exist_ok=True)
+        touch(paw_path, clobber=True)
         pixel_area_weights.to_parquet(paw_path)
 
     def load_people_per_structure(
-        self, tile_key: str | None = None
+        self, resolution: str, tile_key: str | None = None
     ) -> gpd.GeoDataFrame:
-        root = (
-            self.tile_training_data / tile_key if tile_key else self.tile_training_data
-        )
+        if tile_key:
+            root = self.tile_training_data_root(resolution) / tile_key
+        else:
+            root = self.training_data_root(resolution)
         return gpd.read_parquet(root / "people_per_structure.parquet")
 
-    def load_pixel_area_weights(self, tile_key: str | None = None) -> gpd.GeoDataFrame:
-        root = (
-            self.tile_training_data / tile_key if tile_key else self.tile_training_data
-        )
+    def load_pixel_area_weights(
+        self, resolution: str, tile_key: str | None = None
+    ) -> gpd.GeoDataFrame:
+        if tile_key:
+            root = self.tile_training_data_root(resolution) / tile_key
+        else:
+            root = self.training_data_root(resolution)
         return pd.read_parquet(root / "pixel_area_weights.parquet")
 
-    def list_tile_training_data(self) -> list[str]:
-        return [p.stem for p in self.tile_training_data.glob("*") if p.is_dir()]
+    def list_tile_training_data(self, resolution: str) -> list[str]:
+        return [
+            p.stem
+            for p in self.tile_training_data_root(resolution).glob("*")
+            if p.is_dir()
+        ]
 
     def load_tile_training_data(
         self,
+        resolution: str,
         tile_key: str,
         measure: str,
     ) -> rt.RasterArray:
-        path = self.tile_training_data / tile_key / f"{measure}.tif"
+        path = self.tile_training_data_root(resolution) / tile_key / f"{measure}.tif"
         return rt.load_raster(path)
 
     @property

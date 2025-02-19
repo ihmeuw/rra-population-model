@@ -35,11 +35,12 @@ from rra_population_model.model.modeling.splits import (
 
 
 def load_shape_data(
+    resolution: str,
     tile_keys: list[TileID],
     model_root: str | Path,
     denominator: str,
     features: list[str],
-    **parallel_kwargs: Any,  # noqa: ARG001
+    **parallel_kwargs: Any,
 ) -> gpd.GeoDataFrame:
     """Load the shape data for the given tiles.
 
@@ -62,7 +63,7 @@ def load_shape_data(
         The shape data for the given tiles.
     """
     pm_data = PopulationModelData(model_root)
-    admin_data = pm_data.load_people_per_structure()
+    admin_data = pm_data.load_people_per_structure(resolution)
 
     in_tiles = admin_data.tile_key.isin([tk.tile_key for tk in tile_keys])
     # For now we're only using data from admins that have both buildings
@@ -201,19 +202,23 @@ def _load_tile_pixels(
         tile.tile_poly,
     )
     population = pm_data.load_tile_training_data(
+        resolution,
         tile.tile_key,
         f"population_{denominator}",
     )
 
     occupancy_rate = pm_data.load_tile_training_data(
+        resolution,
         tile.tile_key,
         f"occupancy_rate_{denominator}",
     )
     log_occupancy_rate = pm_data.load_tile_training_data(
+        resolution,
         tile.tile_key,
         f"log_occupancy_rate_{denominator}",
     )
     multi_tile = pm_data.load_tile_training_data(
+        resolution,
         tile.tile_key,
         "multi_tile",
     )
@@ -258,6 +263,7 @@ class PPSDataset(Dataset[dict[str, torch.Tensor]]):
 
     def __init__(
         self,
+        resolution: str,
         tiles: ModelSplit,
         features: list[str],
         model_root: str | Path = pmc.MODEL_ROOT,
@@ -269,6 +275,7 @@ class PPSDataset(Dataset[dict[str, torch.Tensor]]):
 
         if data is None:
             shape_data = load_shape_data(
+                resolution,
                 tiles,
                 model_root=model_root,
                 **parallel_kwargs,
@@ -443,6 +450,7 @@ class PPSDataModule(lightning.LightningDataModule):
         if not self.datasets:
             tile_keys = self.model_partition.all_tile_keys
             shape_data = load_shape_data(
+                self.specification.resolution,
                 tile_keys,
                 self.model_root,
                 self.denominator,
@@ -467,6 +475,7 @@ class PPSDataModule(lightning.LightningDataModule):
                     filter_tiles(area_weights, split),
                 )
                 dataset = PPSDataset(
+                    self.specification.resolution,
                     tiles=split,
                     features=self.features,
                     model_root=self.model_root,

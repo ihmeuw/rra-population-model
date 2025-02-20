@@ -118,7 +118,7 @@ ROOT/
                                 epoch={EPOCH}-step={STEP}.ckpt
                             hparams.yaml
                             metrics.csv
-                    specification.json
+                    specification.yaml
                     model.ckpt # symlink to checkpoint
                     raw_predictions/
                         {TIME_POINT}/

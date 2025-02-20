@@ -29,6 +29,7 @@ class BuiltVersion(BaseModel):
     version: Literal["v4", "r2023a"]
     time_points: list[str]
     measures: list[str]
+    denominators: list[str]
 
     @property
     def name(self) -> str:
@@ -88,14 +89,26 @@ BUILT_VERSIONS = {
             "nonresidential_density",
             "nonresidential_volume",
         ],
+        denominators=[
+            "density",
+            "volume",
+            "residential_density",
+            "residential_volume",
+        ],
     ),
     "microsoft_v4": BuiltVersion(
         provider="microsoft",
         version="v4",
         time_points=["2023q4"],
         measures=["density"],
+        denominators=["density"],
     ),
 }
+
+DENOMINATORS = []
+for built_version in BUILT_VERSIONS.values():
+    for denominator in built_version.denominators:
+        DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
 
 FEATURE_AVERAGE_RADII = [

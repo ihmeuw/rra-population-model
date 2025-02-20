@@ -45,7 +45,7 @@ class CustomWriter(BasePredictionWriter):
         for i, block in enumerate(outputs["block"]):
             block_key = block.split("_")[0]
             raster = outputs["population_raster"][i]
-            self.pm_data.save_prediction(
+            self.pm_data.save_prediction(  # type: ignore[attr-defined]
                 raster,
                 block_key,
                 self.time_point,
@@ -62,7 +62,7 @@ def inference_main(
     pm_data = PopulationModelData(output_dir)
     model = PPSModel.load_from_checkpoint(model_path)
     model_spec = model.specification
-    root_dir = pm_data.prediction_path("B-0000X-0000Y", time_point, model_spec).parent
+    root_dir = pm_data.prediction_path("B-0000X-0000Y", time_point, model_spec).parent  # type: ignore[attr-defined]
     shell_tools.mkdir(root_dir, parents=True, exist_ok=True)
 
     modeling_frame = pm_data.load_modeling_frame(model_spec.resolution)
@@ -142,5 +142,5 @@ def inference(
             "runtime": "480m",
             "project": "proj_rapidresponse",
         },
-        log_root=pm_data.predictions,
+        log_root=pm_data.predictions,  # type: ignore[attr-defined]
     )

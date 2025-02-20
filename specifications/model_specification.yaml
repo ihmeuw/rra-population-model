@@ -1,0 +1,23 @@
+resolution: "100"
+split: 0
+denominator: "ghsl_residential_volume"
+features:
+  - "log_nighttime_lights"
+  - "ghsl_residential_volume_250m"
+  - "ghsl_residential_volume_500m"
+  - "ghsl_residential_volume_1000m"
+  - "ghsl_residential_volume_2500m"
+  - "ghsl_residential_volume_5000m"
+  - "ghsl_residential_volume_10000m"
+training_target: "admin_log_occupancy_rate"
+loss_target: "admin_log_occupancy_rate"
+loss_metric: "mse"
+test_target: "admin_log_occupancy_rate"
+evaluation_target: "admin_log_occupancy_rate"
+evaluation_metric: "mse"
+random_seed: 112358
+mtype: "linear"
+optimizer: "adam"
+learning_rate: 0.001
+num_cores: 8
+progress_bar: "true"

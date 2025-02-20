@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias
 
@@ -280,18 +279,7 @@ class PopulationModelData:
             mkdir(self.features_root(resolution), exist_ok=True)
             mkdir(self.training_data_root(resolution), exist_ok=True)
             mkdir(self.tile_training_data_root(resolution), exist_ok=True)
-
-        mkdir(self.input_qc, exist_ok=True)
-        mkdir(self.census_qc, exist_ok=True)
-
-        mkdir(self.models, exist_ok=True)
-        mkdir(self.predictions, exist_ok=True)
-        mkdir(self.raking, exist_ok=True)
-        mkdir(self.raked_predictions, exist_ok=True)
-
-        mkdir(self.itu, exist_ok=True)
-
-        mkdir(self.itu_results, exist_ok=True)
+            mkdir(self.model_root(resolution), exist_ok=True)
 
     @property
     def root(self) -> Path:
@@ -385,9 +373,16 @@ class PopulationModelData:
     def gbd_raking_input_path(self, measure: str, version: str) -> Path:
         return self.gbd_raking_inputs / f"{measure}_{version}.parquet"
 
-    def load_gbd_raking_input(self, measure: str, version: str) -> pd.DataFrame:
+    def load_gbd_raking_input(
+        self,
+        measure: str,
+        version: str,
+        **kwargs: Any,
+    ) -> pd.DataFrame | gpd.GeoDataFrame:
         path = self.gbd_raking_input_path(measure, version)
-        return pd.read_parquet(path)
+        if measure == "shapes":
+            return gpd.read_parquet(path, **kwargs)
+        return pd.read_parquet(path, **kwargs)
 
     @property
     def modeling(self) -> Path:
@@ -582,93 +577,123 @@ class PopulationModelData:
         path = self.tile_training_data_root(resolution) / tile_key / f"{measure}.tif"
         return rt.load_raster(path)
 
-    @property
-    def input_qc(self) -> Path:
-        return Path(self.root, "input_qc")
+    def model_root(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / "models"
 
-    @property
-    def census_qc(self) -> Path:
-        return self.input_qc / "census"
+    def model_version_root(self, resolution: str, version: str) -> Path:
+        return self.model_root(resolution) / version
 
-    @property
-    def models(self) -> Path:
-        return Path(self.root, "models")
+    def make_model_version_root(self, resolution: str, version: str) -> Path:
+        dirs = [
+            self.model_version_root(resolution, version),
+            self.raw_predictions_root(resolution, version),
+            self.raking_factors_root(resolution, version),
+            self.raked_predictions_root(resolution, version),
+            self.compiled_predictions_root(resolution, version),
+        ]
+        for path in dirs:
+            mkdir(path)
 
-    def model_root(self, resolution: str, model_name: str) -> Path:
-        return self.models / f"{resolution}m" / model_name
+        return path
 
     def save_model_specification(
         self,
         model_spec: "ModelSpecification",
     ) -> None:
-        resolution = model_spec.resolution
-        model_name = model_spec.name
-        path = self.model_root(resolution, model_name) / "specification.json"
-        mkdir(path.parent, exist_ok=True, parents=True)
-        touch(path, clobber=True)
+        self.make_model_version_root(model_spec.resolution, model_spec.model_version)
+        path = Path(model_spec.output_root) / "specification.yaml"
+        touch(path)
         with path.open("w") as f:
-            json.dump(model_spec.model_dump(mode="json"), f)
+            yaml.safe_dump(model_spec.model_dump(mode="json"), f)
 
     def load_model_specification(
-        self, resolution: str, model_name: str
+        self, resolution: str, version: str
     ) -> "ModelSpecification":
         from rra_population_model.model.modeling.datamodel import ModelSpecification
 
-        path = self.model_root(resolution, model_name) / "specification.json"
+        path = self.model_version_root(resolution, version) / "specification.yaml"
         with path.open() as f:
-            spec = json.load(f)
+            spec = yaml.safe_load(f)
         return ModelSpecification.model_validate(spec)
 
-    @property
-    def predictions(self) -> Path:
-        return Path(self.root, "predictions")
+    def raw_predictions_root(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "raw_predictions"
 
-    def prediction_path(
-        self, block_key: str, time_point: str, model_spec: "ModelSpecification"
+    def raw_prediction_path(
+        self,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
     ) -> Path:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
         return (
-            self.predictions
-            / f"{model_spec.resolution}m"
-            / model_spec.name
-            / f"{block_key}_{time_point}.tif"
+            self.raw_predictions_root(resolution, version)
+            / time_point
+            / f"{block_key}.tif"
         )
 
-    def save_prediction(
+    def save_raw_prediction(
         self,
         raster: rt.RasterArray,
         block_key: str,
         time_point: str,
         model_spec: "ModelSpecification",
     ) -> None:
-        path = self.prediction_path(block_key, time_point, model_spec)
+        path = self.raw_prediction_path(block_key, time_point, model_spec)
         mkdir(path.parent, exist_ok=True)
         save_raster(raster, path)
 
-    def load_prediction(
+    def load_raw_prediction(
         self,
         block_key: str,
         time_point: str,
         model_spec: "ModelSpecification",
     ) -> rt.RasterArray:
-        path = self.prediction_path(block_key, time_point, model_spec)
+        path = self.raw_prediction_path(block_key, time_point, model_spec)
         return rt.load_raster(path)
 
-    @property
-    def raking(self) -> Path:
-        return Path(self.root, "raking")
+    def raking_factors_root(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "raking_factors"
 
-    @property
-    def raked_predictions(self) -> Path:
-        return self.raking / "predictions"
+    def raking_factor_path(
+        self, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        return (
+            self.raking_factors_root(model_spec.resolution, model_spec.model_version)
+            / f"{time_point}.parquet"
+        )
+
+    def save_raking_factors(
+        self,
+        raking_factors: pd.DataFrame,
+        time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> None:
+        path = self.raking_factor_path(time_point, model_spec)
+        touch(path, clobber=True)
+        raking_factors.to_parquet(path)
+
+    def load_raking_factors(
+        self,
+        time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> pd.DataFrame:
+        path = self.raking_factor_path(time_point, model_spec)
+        return pd.read_parquet(path)
+
+    def raked_predictions_root(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "raked_predictions"
 
     def raked_prediction_path(
         self, block_key: str, time_point: str, model_spec: "ModelSpecification"
     ) -> Path:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
         return (
-            self.raked_predictions
-            / f"{model_spec.resolution}m"
-            / model_spec.name
-            / f"{block_key}_{time_point}.tif"
+            self.raked_predictions_root(resolution, version)
+            / time_point
+            / f"{block_key}.tif"
         )
 
     def save_raked_prediction(
@@ -679,7 +704,7 @@ class PopulationModelData:
         model_spec: "ModelSpecification",
     ) -> None:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
-        mkdir(path.parent, exist_ok=True, parents=True)
+        mkdir(path.parent, exist_ok=True)
         save_raster(raster, path)
 
     def load_raked_prediction(
@@ -691,21 +716,21 @@ class PopulationModelData:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
         return rt.load_raster(path)
 
-    @property
-    def compiled(self) -> Path:
-        return Path(self.root, "compiled")
+    def compiled_predictions_root(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "compiled_predictions"
 
-    def compiled_path(
+    def compiled_prediction_path(
         self, group_key: str, time_point: str, model_spec: "ModelSpecification"
     ) -> Path:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
         return (
-            self.compiled
-            / f"{model_spec.resolution}m"
-            / model_spec.name
-            / f"{group_key}_{time_point}.tif"
+            self.compiled_predictions_root(resolution, version)
+            / time_point
+            / f"{group_key}.tif"
         )
 
-    def save_compiled(
+    def save_compiled_prediction(
         self,
         raster: rt.RasterArray,
         group_key: str,
@@ -713,9 +738,18 @@ class PopulationModelData:
         model_spec: "ModelSpecification",
         **save_kwargs: Any,
     ) -> None:
-        path = self.compiled_path(group_key, time_point, model_spec)
-        mkdir(path.parent, exist_ok=True, parents=True)
+        path = self.compiled_prediction_path(group_key, time_point, model_spec)
+        mkdir(path.parent, exist_ok=True)
         save_raster_to_cog(raster, path, **save_kwargs)
+
+    def load_compiled_prediction(
+        self,
+        group_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> rt.RasterArray:
+        path = self.compiled_prediction_path(group_key, time_point, model_spec)
+        return rt.load_raster(path)
 
     @property
     def results(self) -> Path:
@@ -737,7 +771,7 @@ class PopulationModelData:
         self, raster: rt.RasterArray, iso3: str, model_spec: "ModelSpecification"
     ) -> None:
         resolution = model_spec.resolution
-        model_name = model_spec.name
+        model_name = model_spec.model_version
         out_path = self.itu_results / f"{resolution}m" / model_name / f"{iso3}.tif"
         mkdir(out_path.parent, exist_ok=True, parents=True)
         save_raster(raster, out_path)

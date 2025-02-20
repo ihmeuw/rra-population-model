@@ -72,9 +72,9 @@ def aggregate_unraked_population(
     model_spec = pm_data.load_model_specification(resolution, model_name)
     load_time_point = get_load_time_point(time_point)
 
-    r = pm_data.load_prediction(block_key, load_time_point, model_spec)
+    r = pm_data.load_prediction(block_key, load_time_point, model_spec)  # type: ignore[attr-defined]
     for location_id, geom in shape_map.items():
-        est_pop[location_id] = np.nansum(r.mask(geom))  # type: ignore[assignment]
+        est_pop[location_id] = np.nansum(r.mask(geom))
     return est_pop
 
 
@@ -192,7 +192,7 @@ def rake_main(
     model_spec = pm_data.load_model_specification(resolution, model_name)
     load_time_point = get_load_time_point(time_point)
     print("Loading unraked prediction")
-    unraked_data = pm_data.load_prediction(block_key, load_time_point, model_spec)
+    unraked_data = pm_data.load_prediction(block_key, load_time_point, model_spec)  # type: ignore[attr-defined]
 
     print("Loading raking factors")
     raking_data = gpd.read_parquet(
@@ -309,7 +309,7 @@ def rake(
             "output-dir": output_dir,
         },
         max_attempts=1,
-        log_root=pm_data.raking,
+        log_root=pm_data.raking,  # type: ignore[attr-defined]
     )
 
     model_frame = pm_data.load_modeling_frame(resolution)
@@ -336,5 +336,5 @@ def rake(
             "output-dir": output_dir,
         },
         max_attempts=3,
-        log_root=pm_data.raking,
+        log_root=pm_data.raking,  # type: ignore[attr-defined]
     )

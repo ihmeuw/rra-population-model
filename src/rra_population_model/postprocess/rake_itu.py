@@ -95,7 +95,7 @@ def rake_itu_main(
     rasters = []
     for i, block_key in enumerate(blocks.index):
         print(f"Loading block {i}/{len(blocks)}: {block_key}")
-        r = pm_data.load_prediction(block_key, "2023q4", model_spec).resample_to(
+        r = pm_data.load_prediction(block_key, "2023q4", model_spec).resample_to(  # type: ignore[attr-defined]
             itu_mask, "sum"
         )
         rasters.append(r)

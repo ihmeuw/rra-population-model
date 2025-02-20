@@ -231,7 +231,9 @@ def _load_tile_pixels(
         "multi_tile": multi_tile,
         **tile_features,
     }
-    area_weights = pm_data.load_pixel_area_weights(tile.tile_key).set_index("pixel_id")
+    area_weights = pm_data.load_pixel_area_weights(resolution, tile.tile_key).set_index(
+        "pixel_id"
+    )
 
     def extract(key: str) -> pd.Series:  # type: ignore[type-arg]
         return pd.Series(tile_data[key].to_numpy().flatten(), name=key)
@@ -425,6 +427,8 @@ class PPSDataModule(lightning.LightningDataModule):
     def __init__(
         self,
         model_specification: dict[str, Any],
+        *,
+        verbose: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -432,15 +436,17 @@ class PPSDataModule(lightning.LightningDataModule):
         self.specification = ModelSpecification(**model_specification)
 
         partitions = get_train_validate_test_splits(
-            model_root=self.specification.root,
+            model_root=self.specification.model_root,
             resolution=self.specification.resolution,
         )
         self.model_partition = partitions[self.specification.split]
         self.denominator = self.specification.denominator
         self.features = self.specification.features
-        self.model_root = self.specification.root
+        self.model_root = self.specification.model_root
 
         self.datasets: dict[str, PPSDataset] = {}
+
+        self.verbose = verbose
 
     def setup(self, stage: str | None = None) -> None:  # noqa: ARG002
         """Set up the data module.
@@ -456,7 +462,7 @@ class PPSDataModule(lightning.LightningDataModule):
                 self.denominator,
                 self.features,
                 num_cores=self.specification.num_cores,
-                progress_bar=self.specification.progress_bar,
+                progress_bar=self.verbose,
             )
             pixel_data, area_weights = load_pixel_data(
                 tile_keys,
@@ -465,7 +471,7 @@ class PPSDataModule(lightning.LightningDataModule):
                 self.denominator,
                 self.features,
                 num_cores=self.specification.num_cores,
-                progress_bar=self.specification.progress_bar,
+                progress_bar=self.verbose,
             )
 
             for split_name, split in self.model_partition._asdict().items():
@@ -511,7 +517,7 @@ class InferenceDataModule(lightning.LightningDataModule):
         self.block_keys = block_keys
         self.time_point = time_point
         self.features = self.specification.features
-        self.model_root = self.specification.root
+        self.model_root = self.specification.model_root
 
         self.num_workers = num_workers
 

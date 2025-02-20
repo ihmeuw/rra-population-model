@@ -453,7 +453,7 @@ def plot_census_summary_main(
     census_data = pm_data.load_census_data(iso3, year)
     census_data, summary_data = prepare_data_for_plotting(census_data)
 
-    output_root = pm_data.census_qc
+    output_root = pm_data.census_qc  # type: ignore[attr-defined]
 
     admin_plot_path = output_root / f"{iso3}_{year}_admin_plot.pdf"
     plot_admin_level_data(census_data, iso3, year, save_path=admin_plot_path)
@@ -573,4 +573,4 @@ def plot_census_summary(
     )
 
     print("Merging PDFs.")
-    merge_pdfs(pm_data.census_qc, "census_summary.pdf")
+    merge_pdfs(pm_data.census_qc, "census_summary.pdf")  # type: ignore[attr-defined]

@@ -6,9 +6,7 @@ from typing import NamedTuple, TypeAlias
 
 import shapely
 import torch
-from pydantic import BaseModel, Field
-
-from rra_population_model import constants as pmc
+from pydantic import BaseModel
 
 
 class TileID(NamedTuple):
@@ -27,6 +25,9 @@ class ModelSplit(list[TileID]):
     def tile_keys(self) -> list[str]:
         """Get all the tile keys in the split."""
         return [tile.tile_key for tile in self]
+
+    def __repr__(self) -> str:
+        return f"ModelSplit({len(self)} tiles)"
 
 
 class ModelPartition(NamedTuple):
@@ -76,15 +77,14 @@ class ModelTarget(StrEnum):
 
 
 class ModelSpecification(BaseModel):
-    name: str
-    # Data selection and evaluation parameters
-    root: str = str(pmc.MODEL_ROOT)  # The root directory of the model
-    split: int = 0  # Which test/train/validate split to use
-    denominator: str = "msftv2_density"
-    resolution: str = "40"  # The resolution of the tiles
+    model_version: str
+    model_root: str
+    output_root: str
+    denominator: str
+    resolution: str
+    features: list[str]
 
-    # Covariates to include in the model
-    features: list[str] = Field(default_factory=lambda: ["nighttime_lights"])
+    split: int = 0  # Which test/train/validate split to use
     # What the model predicts from the covariates in training
     training_target: ModelTarget = ModelTarget.ADMIN_LOG_OCCUPANCY_RATE
     # What the loss function evaluates (may be a transformation of the training target)
@@ -115,4 +115,3 @@ class ModelSpecification(BaseModel):
 
     # Data loading parameters
     num_cores: int = 8
-    progress_bar: bool = True

@@ -53,7 +53,7 @@ def training_data_main(
     for n_tile_meta in training_meta.tile_neighborhood:
         print(n_tile_meta.key)
         n_tile_gdf = utils.get_tile_feature_gdf(
-            tile_meta,
+            n_tile_meta,
             training_meta,
             pm_data,
         )

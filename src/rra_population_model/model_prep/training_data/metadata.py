@@ -63,11 +63,6 @@ def get_training_metadata(
         TileMetadata.from_model_frame(model_frame, key) for key in neighborhood_keys
     ]
 
-    denominators = []
-    for built_version in pmc.BUILT_VERSIONS.values():
-        for measure in built_version.measures:
-            denominators.append(f"{built_version.name}_{measure}")  # noqa: PERF401
-
     features = pm_data.list_features(resolution, tile_meta.block_key, time_point)
 
     return TrainingMetadata(
@@ -77,6 +72,6 @@ def get_training_metadata(
         time_point=time_point,
         tile_neighborhood=tile_neighborhood,
         intersecting_admins=intersecting_admins,
-        denominators=denominators,
+        denominators=pmc.DENOMINATORS,
         features=features,
     )

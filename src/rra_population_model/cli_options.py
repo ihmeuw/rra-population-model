@@ -82,6 +82,44 @@ def with_time_point(
     )
 
 
+def with_denominator(
+    choices: Collection[str] = pmc.DENOMINATORS,
+    *,
+    allow_all: bool = False,
+) -> ClickOption[_P, _T]:
+    return with_choice(
+        "denominator",
+        "d",
+        allow_all=allow_all,
+        choices=choices,
+        help="Denominator to run.",
+        convert=choices is not None and allow_all,
+    )
+
+
+def with_ntl_option(
+    *,
+    allow_all: bool = False,
+) -> ClickOption[_P, _T]:
+    return with_choice(
+        "ntl_option",
+        "n",
+        allow_all=allow_all,
+        choices=["none", "ntl", "log_ntl"],
+        help="Nighttime light option to run.",
+        convert=allow_all,
+    )
+
+
+def with_version() -> ClickOption[_P, _T]:
+    return click.option(
+        "--version",
+        type=click.STRING,
+        required=True,
+        help="Version of model to run.",
+    )
+
+
 def with_block_key() -> ClickOption[_P, _T]:
     return click.option(
         "--block-key",

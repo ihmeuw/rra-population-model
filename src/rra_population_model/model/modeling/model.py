@@ -28,6 +28,8 @@ class PPSModel(lightning.LightningModule):
     def __init__(
         self,
         model_specification: dict[str, Any],
+        *,
+        verbose: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -55,6 +57,7 @@ class PPSModel(lightning.LightningModule):
         )
 
         self.epoch = 0
+        self.verbose = verbose
 
     ###################
     # Lightning hooks #
@@ -75,7 +78,7 @@ class PPSModel(lightning.LightningModule):
             model_prediction,
             y_true,
         )
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=self.verbose)
         return loss
 
     def validation_step(
@@ -93,7 +96,7 @@ class PPSModel(lightning.LightningModule):
             model_prediction,
             y_true,
         )
-        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_loss", loss, prog_bar=self.verbose)
         return loss
 
     def test_step(

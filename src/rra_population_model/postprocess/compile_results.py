@@ -81,7 +81,7 @@ def compile_results_main(
 
     print("writing cog")
     group_key = f"G-{bx:>04}X-{by:>04}Y"
-    pm_data.save_compiled(
+    pm_data.save_compiled(  # type: ignore[attr-defined]
         r, group_key, time_point, model_spec, resampling="average", num_cores=num_cores
     )
 
@@ -132,7 +132,7 @@ def upsample_main(
     check_gdal_installed()
     pm_data = PopulationModelData(output_dir)
     model_spec = pm_data.load_model_specification(resolution, model_name)
-    compiled_root = pm_data.compiled_path(
+    compiled_root = pm_data.compiled_path(  # type: ignore[attr-defined]
         "G-0000X-0000Y", time_point, model_spec
     ).parent
     vrt_path = compiled_root / f"{time_point}.vrt"
@@ -262,7 +262,7 @@ def compile_results(
     model_spec = pm_data.load_model_specification(resolution, model_name)
     for tp in time_point:
         print(tp)
-        compiled_root = pm_data.compiled_path("G-0000X-0000Y", tp, model_spec).parent
+        compiled_root = pm_data.compiled_path("G-0000X-0000Y", tp, model_spec).parent  # type: ignore[attr-defined]
 
         make_vrt(tp, compiled_root)
 

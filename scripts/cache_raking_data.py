@@ -178,7 +178,7 @@ def cache_raking_data(model_root: str) -> None:
         shape = loader(path)
         out_path = data_out_root / f"shapes_{name}.parquet"
         touch(out_path, clobber=True)
-        shape.to_parquet(out_path)
+        shape.to_parquet(out_path, write_covering_bbox=True)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from rra_population_model import constants as pmc
 
 if TYPE_CHECKING:
     from rra_population_model.model.modeling.datamodel import ModelSpecification
+    from rra_population_model.model.modeling.model import PPSModel
 
 # Type aliases
 Polygon: TypeAlias = shapely.Polygon | shapely.MultiPolygon
@@ -440,6 +441,9 @@ class PopulationModelData:
             / f"{feature_name}.tif"
         )
 
+    def list_feature_time_points(self, resolution: str) -> list[str]:
+        return [p.name for p in self.features_root(resolution).iterdir() if p.is_dir()]
+
     def link_feature(
         self,
         resolution: str,
@@ -616,6 +620,12 @@ class PopulationModelData:
             spec = yaml.safe_load(f)
         return ModelSpecification.model_validate(spec)
 
+    def load_model(self, resolution: str, version: str) -> "PPSModel":
+        from rra_population_model.model.modeling.model import PPSModel
+
+        ckpt_path = self.model_version_root(resolution, version) / "best_model.ckpt"
+        return PPSModel.load_from_checkpoint(ckpt_path)
+
     def raw_predictions_root(self, resolution: str, version: str) -> Path:
         return self.model_version_root(resolution, version) / "raw_predictions"
 
@@ -632,6 +642,15 @@ class PopulationModelData:
             / time_point
             / f"{block_key}.tif"
         )
+
+    def list_raw_prediction_time_points(
+        self, resolution: str, version: str
+    ) -> list[str]:
+        return [
+            p.name
+            for p in self.raw_predictions_root(resolution, version).iterdir()
+            if p.is_dir()
+        ]
 
     def save_raw_prediction(
         self,
@@ -664,9 +683,18 @@ class PopulationModelData:
             / f"{time_point}.parquet"
         )
 
+    def list_raking_factor_time_points(
+        self, resolution: str, version: str
+    ) -> list[str]:
+        return [
+            p.stem
+            for p in self.raking_factors_root(resolution, version).iterdir()
+            if p.is_file()
+        ]
+
     def save_raking_factors(
         self,
-        raking_factors: pd.DataFrame,
+        raking_factors: gpd.GeoDataFrame,
         time_point: str,
         model_spec: "ModelSpecification",
     ) -> None:
@@ -678,9 +706,10 @@ class PopulationModelData:
         self,
         time_point: str,
         model_spec: "ModelSpecification",
-    ) -> pd.DataFrame:
+        **kwargs: Any,
+    ) -> gpd.GeoDataFrame:
         path = self.raking_factor_path(time_point, model_spec)
-        return pd.read_parquet(path)
+        return gpd.read_parquet(path, **kwargs)
 
     def raked_predictions_root(self, resolution: str, version: str) -> Path:
         return self.model_version_root(resolution, version) / "raked_predictions"

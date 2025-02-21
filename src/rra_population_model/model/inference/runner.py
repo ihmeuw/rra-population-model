@@ -5,7 +5,7 @@ from typing import Any, Literal
 import click
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter
-from rra_tools import jobmon, shell_tools
+from rra_tools import jobmon
 
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
@@ -15,7 +15,6 @@ from rra_population_model.data import (
 from rra_population_model.model.modeling import (
     InferenceDataModule,
     ModelSpecification,
-    PPSModel,
 )
 
 
@@ -45,7 +44,7 @@ class CustomWriter(BasePredictionWriter):
         for i, block in enumerate(outputs["block"]):
             block_key = block.split("_")[0]
             raster = outputs["population_raster"][i]
-            self.pm_data.save_prediction(  # type: ignore[attr-defined]
+            self.pm_data.save_raw_prediction(
                 raster,
                 block_key,
                 self.time_point,
@@ -54,25 +53,25 @@ class CustomWriter(BasePredictionWriter):
 
 
 def inference_main(
-    model_path: str | Path,
+    resolution: str,
+    version: str,
     time_point: str,
     output_dir: str | Path,
     progress_bar: bool,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    model = PPSModel.load_from_checkpoint(model_path)
+
+    model = pm_data.load_model(resolution, version)
     model_spec = model.specification
-    root_dir = pm_data.prediction_path("B-0000X-0000Y", time_point, model_spec).parent  # type: ignore[attr-defined]
-    shell_tools.mkdir(root_dir, parents=True, exist_ok=True)
 
     modeling_frame = pm_data.load_modeling_frame(model_spec.resolution)
     block_keys = modeling_frame.block_key.unique().tolist()
 
     datamodule = InferenceDataModule(
-        model.specification.model_dump(),
+        model_spec.model_dump(),
         block_keys,
         time_point,
-        num_workers=8,
+        num_workers=0,
     )
     pred_writer = CustomWriter(
         pm_data, model.specification, time_point, write_interval="batch"
@@ -85,23 +84,21 @@ def inference_main(
 
 
 @click.command()  # type: ignore[arg-type]
-@click.option(
-    "--model-path",
-    required=True,
-    type=click.Path(exists=True),
-    help="Path to the model checkpoint.",
-)
+@clio.with_resolution()
+@clio.with_version()
 @clio.with_time_point()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_progress_bar()
 def inference_task(
-    model_path: str,
+    resolution: str,
+    version: str,
     time_point: str,
     output_dir: str,
     progress_bar: bool,
 ) -> None:
     inference_main(
-        model_path,
+        resolution,
+        version,
         time_point,
         output_dir,
         progress_bar,
@@ -109,31 +106,32 @@ def inference_task(
 
 
 @click.command()  # type: ignore[arg-type]
-@click.option(
-    "--model-path",
-    required=True,
-    type=click.Path(exists=True),
-    help="Path to the model checkpoint.",
-)
-@clio.with_time_point(allow_all=True)
+@clio.with_resolution()
+@clio.with_version()
+@clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def inference(
-    model_path: str,
-    time_point: list[str],
+    resolution: str,
+    version: str,
+    time_point: str,
     output_dir: str,
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
+    feature_time_points = pm_data.list_feature_time_points(resolution)
+    time_points = clio.convert_choice(time_point, feature_time_points)
+    print(f"Running inference for {len(time_points)} time points.")
 
     jobmon.run_parallel(
         runner="pmtask model",
         task_name="inference",
         node_args={
-            "time-point": time_point,
+            "time-point": time_points,
         },
         task_args={
-            "model-path": model_path,
+            "resolution": resolution,
+            "version": version,
             "output-dir": output_dir,
         },
         task_resources={
@@ -142,5 +140,5 @@ def inference(
             "runtime": "480m",
             "project": "proj_rapidresponse",
         },
-        log_root=pm_data.predictions,  # type: ignore[attr-defined]
+        log_root=pm_data.log_dir("model_inference"),
     )

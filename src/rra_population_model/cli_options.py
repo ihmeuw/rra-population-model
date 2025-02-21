@@ -68,7 +68,7 @@ def with_year(
 
 
 def with_time_point(
-    choices: Collection[str] = pmc.ALL_TIME_POINTS,
+    choices: Collection[str] | None = pmc.ALL_TIME_POINTS,
     *,
     allow_all: bool = False,
 ) -> ClickOption[_P, _T]:

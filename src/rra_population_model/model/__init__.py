@@ -1,4 +1,4 @@
-from rra_population_model.model.inference import (
+from rra_population_model.model.inference.runner import (
     inference,
     inference_task,
 )

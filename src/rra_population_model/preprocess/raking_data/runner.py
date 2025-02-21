@@ -11,7 +11,7 @@ from rra_population_model.preprocess.raking_data import (
 )
 
 
-def raking_data_main(
+def raking_data_main(  # noqa: PLR0915
     output_dir: str,
     out_version: str,
     wpp_version: str = "2022",
@@ -62,6 +62,9 @@ def raking_data_main(
         ]
         p_fhs = populations["fhs"].merge(h_fhs, on="location_id")
         p_gbd = p_gbd[p_gbd.location_id.isin(p_fhs.location_id.unique())]
+        most_detailed_locs = p_fhs[p_fhs.most_detailed == 1].location_id.unique()
+        p_gbd.loc[p_gbd.location_id.isin(most_detailed_locs), "most_detailed"] = 1
+        p_gbd.loc[~p_gbd.location_id.isin(most_detailed_locs), "most_detailed"] = 0
         p = pd.concat([p_gbd, p_fhs], axis=0, ignore_index=True)
     else:
         p = p_gbd

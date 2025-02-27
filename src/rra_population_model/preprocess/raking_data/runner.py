@@ -141,7 +141,7 @@ def raking_data_main(  # noqa: PLR0915
     pm_data.save_raking_data(full_pop, full_shapes, f"{out_version}_wpp_{wpp_version}")
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_choice("out_version", allow_all=False, choices=["gbd_2021", "fhs_2021"])
 def raking_data(

@@ -49,7 +49,7 @@ def mosaic_main(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @click.option("--bx", type=int, required=True)
@@ -69,7 +69,7 @@ def mosaic_task(
     mosaic_main(resolution, version, bx, by, time_point, output_dir, num_cores)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point(choices=None, allow_all=True)

@@ -71,7 +71,7 @@ def rake_main(
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_block_key()
@@ -87,10 +87,7 @@ def rake_task(
     rake_main(resolution, version, block_key, time_point, output_dir)
 
 
-# workflow entry point
-
-
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution(allow_all=False)
 @clio.with_version()
 @clio.with_time_point(choices=None, allow_all=True)

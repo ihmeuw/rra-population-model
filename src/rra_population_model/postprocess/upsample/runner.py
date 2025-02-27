@@ -1,9 +1,8 @@
 import shlex
 import shutil
 import subprocess
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from pathlib import Path
-from typing import ParamSpec, TypeVar
 
 import click
 from rra_tools import jobmon
@@ -15,28 +14,25 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import check_gdal_installed
 
 UPSAMPLE_SPECS = {
-    # "world_cylindrical_250f": (pmc.CRSES["world_cylindrical"], 250, "average"),
-    # "world_cylindrical_500f": (pmc.CRSES["world_cylindrical"], 500, "average"),
-    # "world_cylindrical_1000f": (pmc.CRSES["world_cylindrical"], 1000, "average"),
-    # "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
-    # "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
-    # "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
-    # "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
+    "world_cylindrical_250f": (pmc.CRSES["world_cylindrical"], 250, "average"),
+    "world_cylindrical_500f": (pmc.CRSES["world_cylindrical"], 500, "average"),
+    "world_cylindrical_1000f": (pmc.CRSES["world_cylindrical"], 1000, "average"),
+    "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
+    "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
+    "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
+    "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
     "world_cylindrical_5000": (pmc.CRSES["world_cylindrical"], 5000, "sum"),
     "world_cylindrical_1000": (pmc.CRSES["world_cylindrical"], 1000, "sum"),
     "wgs84_0p1": (pmc.CRSES["wgs84"], 0.1, "sum"),
     "wgs84_0p01": (pmc.CRSES["wgs84"], 0.01, "sum"),
 }
 
-_T = TypeVar("_T")
-_P = ParamSpec("_P")
 
-
-def with_spec_name(
+def with_spec_name[**P, T](
     choices: Collection[str] = list(UPSAMPLE_SPECS),
     *,
     allow_all: bool = False,
-) -> clio.ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return clio.with_choice(
         "spec_name",
         allow_all=allow_all,
@@ -46,7 +42,7 @@ def with_spec_name(
     )
 
 
-def with_run_stamp() -> clio.ClickOption[_P, str]:
+def with_run_stamp[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--run-stamp",
         type=str,
@@ -61,7 +57,7 @@ def link_native_resolution(
     time_point: str,
     vrt_path: Path,
     out_root: Path,
-):
+) -> None:
     if not spec_name.startswith("world_cylindrical_1000"):
         return
 
@@ -121,7 +117,7 @@ def upsample_main(
     subprocess.run(shlex.split(cmd), check=True)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @with_run_stamp()
 @clio.with_resolution()
 @clio.with_version()
@@ -139,7 +135,7 @@ def upsample_task(
     upsample_main(run_stamp, resolution, version, spec_name, time_point, output_dir)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @with_run_stamp()
 @clio.with_resolution()
 @clio.with_version()

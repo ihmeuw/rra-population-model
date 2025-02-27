@@ -267,7 +267,7 @@ def mosaic_tile(
                 resampling="average",
             )
             tiles.append(tile)
-        except ValueError:  # noqa: PERF203
+        except ValueError:
             # This is kind of a hack, but there's not a clean way to fix it easily.
             # The issue is that the resolution of the tiles do not exactly line up
             # to the bounds of the world as defined by the CRS. The southernmost

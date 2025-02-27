@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from enum import StrEnum
-from typing import NamedTuple, TypeAlias
+from typing import NamedTuple
 
 import shapely
 import torch
@@ -55,8 +55,8 @@ class Metric(StrEnum):
     R2 = "r2"
 
 
-MetricFunction: TypeAlias = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-ScoreFunction: TypeAlias = Callable[
+type MetricFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+type ScoreFunction = Callable[
     [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
 ]
 

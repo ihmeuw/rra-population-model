@@ -27,7 +27,7 @@ def census_data_main(
     pm_data.save_census_data(census_data, iso3, year)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_iso3()
 @clio.with_year()
 @clio.with_input_directory("pop-data", pmc.POPULATION_DATA_ROOT)
@@ -41,7 +41,7 @@ def census_data_task(
     census_data_main(iso3, year, pop_data_dir, output_dir)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_iso3(allow_all=True)
 @clio.with_year(allow_all=True)
 @clio.with_input_directory("pop-data", pmc.POPULATION_DATA_ROOT)

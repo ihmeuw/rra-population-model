@@ -9,7 +9,7 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.model.modeling.datamodel import ModelSpecification
 
 
-def make_vrt(vrt_path: Path):
+def make_vrt(vrt_path: Path) -> None:
     gdalbuildvrt_path = shutil.which("gdalbuildvrt")
     files = " ".join([str(p) for p in vrt_path.parent.glob("G*.tif")])
 

@@ -1,10 +1,8 @@
-from collections.abc import Collection
-from typing import ParamSpec, TypeVar
+from collections.abc import Callable, Collection
 
 import click
 from rra_tools.cli_tools import (
     RUN_ALL,
-    ClickOption,
     convert_choice,
     process_choices,
     with_choice,
@@ -21,15 +19,12 @@ from rra_tools.cli_tools import (
 
 from rra_population_model import constants as pmc
 
-_T = TypeVar("_T")
-_P = ParamSpec("_P")
 
-
-def with_resolution(
+def with_resolution[**P, T](
     choices: Collection[str] = pmc.RESOLUTIONS.to_list(),
     *,
     allow_all: bool = False,
-) -> ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return with_choice(
         "resolution",
         allow_all=allow_all,
@@ -39,11 +34,11 @@ def with_resolution(
     )
 
 
-def with_iso3(
+def with_iso3[**P, T](
     choices: Collection[str] | None = None,
     *,
     allow_all: bool = False,
-) -> ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return with_choice(
         "iso3",
         allow_all=allow_all,
@@ -53,11 +48,11 @@ def with_iso3(
     )
 
 
-def with_year(
+def with_year[**P, T](
     choices: Collection[str] | None = None,
     *,
     allow_all: bool = False,
-) -> ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return with_choice(
         "year",
         "y",
@@ -67,11 +62,11 @@ def with_year(
     )
 
 
-def with_time_point(
+def with_time_point[**P, T](
     choices: Collection[str] | None = pmc.ALL_TIME_POINTS,
     *,
     allow_all: bool = False,
-) -> ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return with_choice(
         "time_point",
         "t",
@@ -82,11 +77,11 @@ def with_time_point(
     )
 
 
-def with_denominator(
+def with_denominator[**P, T](
     choices: Collection[str] = pmc.DENOMINATORS,
     *,
     allow_all: bool = False,
-) -> ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return with_choice(
         "denominator",
         "d",
@@ -97,10 +92,10 @@ def with_denominator(
     )
 
 
-def with_ntl_option(
+def with_ntl_option[**P, T](
     *,
     allow_all: bool = False,
-) -> ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return with_choice(
         "ntl_option",
         "n",
@@ -111,7 +106,7 @@ def with_ntl_option(
     )
 
 
-def with_version() -> ClickOption[_P, _T]:
+def with_version[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--version",
         type=click.STRING,
@@ -120,7 +115,7 @@ def with_version() -> ClickOption[_P, _T]:
     )
 
 
-def with_block_key() -> ClickOption[_P, _T]:
+def with_block_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--block-key",
         "-b",
@@ -130,7 +125,7 @@ def with_block_key() -> ClickOption[_P, _T]:
     )
 
 
-def with_tile_key() -> ClickOption[_P, _T]:
+def with_tile_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--tile-key",
         "-k",
@@ -140,19 +135,8 @@ def with_tile_key() -> ClickOption[_P, _T]:
     )
 
 
-def with_model_name() -> ClickOption[_P, _T]:
-    return click.option(
-        "--model-name",
-        "-m",
-        type=click.STRING,
-        required=True,
-        help="Model name to run.",
-    )
-
-
 __all__ = [
     "RUN_ALL",
-    "ClickOption",
     "convert_choice",
     "process_choices",
     "with_block_key",

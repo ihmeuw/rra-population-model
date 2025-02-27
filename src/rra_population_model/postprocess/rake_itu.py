@@ -128,7 +128,7 @@ def rake_itu_main(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_version()
 @clio.with_resolution()
 @clio.with_iso3()
@@ -147,7 +147,7 @@ def rake_itu_task(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_iso3(allow_all=True)

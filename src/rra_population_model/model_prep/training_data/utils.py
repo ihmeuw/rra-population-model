@@ -97,7 +97,7 @@ def build_summary_people_per_structure(
         ],
         ignore_index=True,
     )
-    return data
+    return data  # type: ignore[no-any-return]
 
 
 def safe_divide(

@@ -76,7 +76,7 @@ def train_main(
     print("Done!")
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_denominator()
@@ -96,7 +96,7 @@ def train_task(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_denominator(allow_all=True)
 @clio.with_ntl_option(allow_all=True)

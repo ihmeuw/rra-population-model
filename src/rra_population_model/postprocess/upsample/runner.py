@@ -1,10 +1,8 @@
-from pathlib import Path
 import shlex
 import shutil
 import subprocess
-from collections.abc import Collection
-from typing import ParamSpec, TypeVar
-from datetime import datetime
+from collections.abc import Callable, Collection
+from pathlib import Path
 
 import click
 from rra_tools import jobmon
@@ -15,30 +13,26 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import check_gdal_installed
 
-
 UPSAMPLE_SPECS = {
-    # "world_cylindrical_250f": (pmc.CRSES["world_cylindrical"], 250, "average"),
-    # "world_cylindrical_500f": (pmc.CRSES["world_cylindrical"], 500, "average"),
-    # "world_cylindrical_1000f": (pmc.CRSES["world_cylindrical"], 1000, "average"),
-    # "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
-    # "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
-    # "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
-    # "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
+    "world_cylindrical_250f": (pmc.CRSES["world_cylindrical"], 250, "average"),
+    "world_cylindrical_500f": (pmc.CRSES["world_cylindrical"], 500, "average"),
+    "world_cylindrical_1000f": (pmc.CRSES["world_cylindrical"], 1000, "average"),
+    "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
+    "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
+    "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
+    "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
     "world_cylindrical_5000": (pmc.CRSES["world_cylindrical"], 5000, "sum"),
     "world_cylindrical_1000": (pmc.CRSES["world_cylindrical"], 1000, "sum"),
     "wgs84_0p1": (pmc.CRSES["wgs84"], 0.1, "sum"),
     "wgs84_0p01": (pmc.CRSES["wgs84"], 0.01, "sum"),
 }
 
-_T = TypeVar("_T")
-_P = ParamSpec("_P")
 
-
-def with_spec_name(
+def with_spec_name[**P, T](
     choices: Collection[str] = list(UPSAMPLE_SPECS),
     *,
     allow_all: bool = False,
-) -> clio.ClickOption[_P, _T]:
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     return clio.with_choice(
         "spec_name",
         allow_all=allow_all,
@@ -47,7 +41,8 @@ def with_spec_name(
         required=True,
     )
 
-def with_run_stamp() -> clio.ClickOption[_P, str]:
+
+def with_run_stamp[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--run-stamp",
         type=str,
@@ -55,20 +50,19 @@ def with_run_stamp() -> clio.ClickOption[_P, str]:
         required=True,
     )
 
+
 def link_native_resolution(
     resolution: str,
     spec_name: str,
     time_point: str,
     vrt_path: Path,
     out_root: Path,
-):
+) -> None:
     if not spec_name.startswith("world_cylindrical_1000"):
         return
 
     print("Linking native resolution")
-    parent_dir = (
-        out_root / f"{pmc.CRSES['world_cylindrical'].short_name}_{resolution}"
-    )
+    parent_dir = out_root / f"{pmc.CRSES['world_cylindrical'].short_name}_{resolution}"
     mkdir(parent_dir, parents=True, exist_ok=True)
     link_path = parent_dir / f"{time_point}.tif"
     if link_path.exists():
@@ -97,9 +91,7 @@ def upsample_main(
         out_root = pm_data.results / run_stamp
     mkdir(out_root, exist_ok=True)
 
-    link_native_resolution(
-        resolution, spec_name, time_point, vrt_path, out_root
-    )
+    link_native_resolution(resolution, spec_name, time_point, vrt_path, out_root)
 
     crs, target_resolution, resampling = UPSAMPLE_SPECS[spec_name]
 
@@ -125,7 +117,7 @@ def upsample_main(
     subprocess.run(shlex.split(cmd), check=True)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @with_run_stamp()
 @clio.with_resolution()
 @clio.with_version()
@@ -143,7 +135,7 @@ def upsample_task(
     upsample_main(run_stamp, resolution, version, spec_name, time_point, output_dir)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @with_run_stamp()
 @clio.with_resolution()
 @clio.with_version()
@@ -165,7 +157,9 @@ def upsample(
     check_gdal_installed()
     pm_data = PopulationModelData(output_dir)
 
-    compiled_time_points = pm_data.list_compiled_prediction_time_points(resolution, version)
+    compiled_time_points = pm_data.list_compiled_prediction_time_points(
+        resolution, version
+    )
     compiled_time_points = [f"{y}q1" for y in range(1950, 1976)]
     time_points = clio.convert_choice(time_point, compiled_time_points)
 

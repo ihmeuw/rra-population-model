@@ -317,7 +317,7 @@ def heatmap_with_hist_plot(
 
     divider = make_axes_locatable(ax)
 
-    xhist_ax = divider.append_axes("top", size=f"{100/len(y_data)}%", pad=hist_pad)
+    xhist_ax = divider.append_axes("top", size=f"{100 / len(y_data)}%", pad=hist_pad)
     x_data.plot.bar(  # type: ignore[call-overload]
         ax=xhist_ax, color=hist_color, alpha=hist_alpha, width=hist_bar_width
     )
@@ -328,7 +328,7 @@ def heatmap_with_hist_plot(
     strip_axes(xhist_ax)
     xhist_ax.set_xlabel(None)
 
-    yhist_ax = divider.append_axes("right", size=f"{100/len(x_data)}%", pad=hist_pad)
+    yhist_ax = divider.append_axes("right", size=f"{100 / len(x_data)}%", pad=hist_pad)
     y_data.plot.barh(  # type: ignore[call-overload]
         ax=yhist_ax, color=hist_color, alpha=hist_alpha, width=hist_bar_width
     )
@@ -487,7 +487,7 @@ def subset_iso3_year_list(
     return iso3_and_years
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_iso3()
 @clio.with_year()
 @clio.with_output_directory(pmc.MODEL_ROOT)
@@ -539,7 +539,7 @@ def merge_pdfs(pdf_root: str | Path, out_name: str) -> None:
         pdf.unlink()
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_iso3(allow_all=True)
 @clio.with_year(allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)

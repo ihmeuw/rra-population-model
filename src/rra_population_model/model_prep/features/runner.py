@@ -57,7 +57,7 @@ def features_main(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_block_key()
 @clio.with_time_point()
 @clio.with_resolution()
@@ -74,7 +74,7 @@ def features_task(
     features_main(block_key, time_point, resolution, building_density_dir, output_dir)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_time_point(allow_all=True)
 @clio.with_resolution()
 @clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)

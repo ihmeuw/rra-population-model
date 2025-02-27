@@ -12,8 +12,8 @@ from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
-
 TIME_POINT = "2023q4"
+
 
 def load_shape_population(pm_data: PopulationModelData, iso3: str) -> gpd.GeoDataFrame:
     pop = pm_data.load_raking_population("fhs_2021_wpp_2022")
@@ -98,9 +98,8 @@ def rake_itu_main(
     rasters = []
     for i, block_key in enumerate(blocks.index):
         print(f"Loading block {i}/{len(blocks)}: {block_key}")
-        r = (
-            pm_data.load_raw_prediction(block_key, TIME_POINT, model_spec)
-            .resample_to(itu_mask, "sum")
+        r = pm_data.load_raw_prediction(block_key, TIME_POINT, model_spec).resample_to(
+            itu_mask, "sum"
         )
         rasters.append(r)
     prediction = rt.merge(rasters)
@@ -129,7 +128,7 @@ def rake_itu_main(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_version()
 @clio.with_resolution()
 @clio.with_iso3()
@@ -148,7 +147,7 @@ def rake_itu_task(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_iso3(allow_all=True)

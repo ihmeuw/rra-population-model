@@ -90,12 +90,14 @@ def build_summary_people_per_structure(
     resolution: str,
 ) -> pd.DataFrame:
     tile_dirs = list(pm_data.tile_training_data_root(resolution).iterdir())
-    data = pd.concat([
-        pm_data.load_people_per_structure(resolution, tile_dir.name)
-        for tile_dir in tqdm.tqdm(tile_dirs)
-    ], ignore_index=True)
-    return data
-
+    data = pd.concat(
+        [
+            pm_data.load_people_per_structure(resolution, tile_dir.name)
+            for tile_dir in tqdm.tqdm(tile_dirs)
+        ],
+        ignore_index=True,
+    )
+    return data  # type: ignore[no-any-return]
 
 
 def safe_divide(

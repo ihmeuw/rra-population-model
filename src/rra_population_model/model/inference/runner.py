@@ -89,7 +89,7 @@ def inference_main(
     trainer.predict(model, datamodule, return_predictions=False)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point()
@@ -111,7 +111,7 @@ def inference_task(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point(choices=None, allow_all=True)

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
@@ -17,9 +17,9 @@ if TYPE_CHECKING:
     from rra_population_model.model.modeling.model import PPSModel
 
 # Type aliases
-Polygon: TypeAlias = shapely.Polygon | shapely.MultiPolygon
-BBox: TypeAlias = tuple[float, float, float, float]
-Bounds: TypeAlias = BBox | Polygon
+type Polygon = shapely.Polygon | shapely.MultiPolygon
+type BBox = tuple[float, float, float, float]
+type Bounds = BBox | Polygon
 
 
 class TileIndexInfo(BaseModel):
@@ -538,7 +538,7 @@ class PopulationModelData:
         resolution: str,
     ) -> None:
         root = self.training_data_root(resolution)
-        path = root / f"people_per_structure.parquet"
+        path = root / "people_per_structure.parquet"
         touch(path, clobber=True)
         data.to_parquet(path)
 
@@ -831,7 +831,7 @@ class PopulationModelData:
 
 
 def bounds_to_bbox(bounds: Bounds | None) -> BBox | None:
-    if isinstance(bounds, Polygon):
+    if isinstance(bounds, shapely.Polygon | shapely.MultiPolygon):
         bbox = bounds.bounds
     elif isinstance(bounds, tuple):
         bbox = bounds

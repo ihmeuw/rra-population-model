@@ -103,7 +103,7 @@ def training_data_main(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @click.option("--iso3-list", type=str, required=True)
 @clio.with_resolution()
 @clio.with_tile_key()
@@ -126,7 +126,7 @@ def training_data_task(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
@@ -166,5 +166,5 @@ def training_data(
         raise RuntimeError(msg)
 
     print("Building summary datasets.")
-    people_per_structure = utils.build_summary_people_per_structure(resolution, pm_data)
+    people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
     pm_data.save_summary_people_per_structure(people_per_structure, resolution)

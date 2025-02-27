@@ -158,7 +158,7 @@ def raking_factors_main(
     pm_data.save_raking_factors(final_raking_factors, time_point, model_spec)
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point(choices=None)
@@ -178,7 +178,7 @@ def raking_factors_task(
     )
 
 
-@click.command()  # type: ignore[arg-type]
+@click.command()
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point(choices=None, allow_all=True)

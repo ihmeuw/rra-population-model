@@ -333,7 +333,7 @@ class PopulationModelData:
         return self.itu_masks / f"{iso3}.tif"
 
     def list_itu_iso3s(self) -> list[str]:
-        return [f.stem for f in self.itu_masks.glob("*")]
+        return [f.stem for f in self.itu_masks.glob("*.tif")]
 
     def load_itu_mask(self, iso3: str) -> rt.RasterArray:
         path = self.itu_mask_path(iso3)
@@ -532,20 +532,15 @@ class PopulationModelData:
             touch(raster_path, clobber=True)
             save_raster(raster, raster_path)
 
-    def save_summary_training_data(
+    def save_summary_people_per_structure(
         self,
+        data: pd.DataFrame,
         resolution: str,
-        people_per_structure: gpd.GeoDataFrame,
-        pixel_area_weights: gpd.GeoDataFrame,
     ) -> None:
         root = self.training_data_root(resolution)
-        pps_path = root / "people_per_structure.parquet"
-        touch(pps_path, clobber=True)
-        people_per_structure.to_parquet(pps_path)
-
-        paw_path = root / "pixel_area_weights.parquet"
-        touch(paw_path, clobber=True)
-        pixel_area_weights.to_parquet(paw_path)
+        path = root / f"people_per_structure.parquet"
+        touch(path, clobber=True)
+        data.to_parquet(path)
 
     def load_people_per_structure(
         self, resolution: str, tile_key: str | None = None
@@ -725,6 +720,15 @@ class PopulationModelData:
             / f"{block_key}.tif"
         )
 
+    def list_raked_prediction_time_points(
+        self, resolution: str, version: str
+    ) -> list[str]:
+        return [
+            p.name
+            for p in self.raked_predictions_root(resolution, version).iterdir()
+            if p.is_dir()
+        ]
+
     def save_raked_prediction(
         self,
         raster: rt.RasterArray,
@@ -758,6 +762,26 @@ class PopulationModelData:
             / time_point
             / f"{group_key}.tif"
         )
+
+    def compiled_prediction_vrt_path(
+        self, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
+        return (
+            self.compiled_predictions_root(resolution, version)
+            / time_point
+            / "index.vrt"
+        )
+
+    def list_compiled_prediction_time_points(
+        self, resolution: str, version: str
+    ) -> list[str]:
+        return [
+            p.name
+            for p in self.compiled_predictions_root(resolution, version).iterdir()
+            if p.is_dir()
+        ]
 
     def save_compiled_prediction(
         self,

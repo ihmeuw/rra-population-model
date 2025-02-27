@@ -10,38 +10,41 @@ from rra_tools import jobmon
 
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
-from rra_population_model.data import PopulationModelData, RRAPopulationData
+from rra_population_model.data import PopulationModelData
 
 
-def load_shape_population(pop_data: RRAPopulationData, iso3: str) -> gpd.GeoDataFrame:
-    pop = pop_data.load_ihme_populations()
-    h = pop_data.load_ihme_hierarchy()
-    shps = pop_data.load_ihme_shapes()
+TIME_POINT = "2023q4"
 
-    pop = pop[pop.year_id == pop.year_id.max()]
-    pop = pop.merge(h[["location_id", "local_id"]], on="location_id")
-    pop = shps[["location_id", "geometry"]].merge(pop, on="location_id")
-    admin0_pop = pop[pop.local_id == iso3]
+def load_shape_population(pm_data: PopulationModelData, iso3: str) -> gpd.GeoDataFrame:
+    pop = pm_data.load_raking_population("fhs_2021_wpp_2022")
+    pop = pop[pop.year_id == int(TIME_POINT[:4])]
+    shapes = pm_data.load_raking_shapes("fhs_2021_wpp_2022")
+
+    all_pop = shapes.merge(pop, on="location_id")
+    admin0_pop = all_pop[all_pop.ihme_loc_id == iso3]
+
     if admin0_pop.most_detailed.iloc[0] == 0:
         location_id = admin0_pop.location_id.to_numpy()[0]
-        pop = pop[pop.parent_id == location_id]
+        final_pop = all_pop[all_pop.parent_id == location_id]
     else:
-        pop = admin0_pop
-    return pop
+        final_pop = admin0_pop
+    return final_pop
 
 
 def rake_itu_main(
-    iso3: str, model_name: str, resolution: str, pop_data_dir: str, output_dir: str
+    resolution: str,
+    version: str,
+    iso3: str,
+    output_dir: str,
 ) -> None:
-    pop_data = RRAPopulationData(pop_data_dir)
     pm_data = PopulationModelData(output_dir)
 
-    model_spec = pm_data.load_model_specification(resolution, model_name)
+    model_spec = pm_data.load_model_specification(resolution, version)
+    modeling_frame = pm_data.load_modeling_frame(resolution)
 
     print("Building population shapefile")
-    pop = load_shape_population(pop_data, iso3)
+    pop = load_shape_population(pm_data, iso3)
 
-    modeling_frame = pm_data.load_modeling_frame(resolution)
     itu_mask = pm_data.load_itu_mask(iso3)
 
     pop = pop.to_crs(itu_mask.crs)
@@ -95,8 +98,9 @@ def rake_itu_main(
     rasters = []
     for i, block_key in enumerate(blocks.index):
         print(f"Loading block {i}/{len(blocks)}: {block_key}")
-        r = pm_data.load_prediction(block_key, "2023q4", model_spec).resample_to(  # type: ignore[attr-defined]
-            itu_mask, "sum"
+        r = (
+            pm_data.load_raw_prediction(block_key, TIME_POINT, model_spec)
+            .resample_to(itu_mask, "sum")
         )
         rasters.append(r)
     prediction = rt.merge(rasters)
@@ -105,7 +109,7 @@ def rake_itu_main(
     prediction_array = prediction.to_numpy()
     raking_factor = np.ones_like(location_mask)
     for location_id, location_pop in (
-        pop.set_index("location_id").population.to_dict().items()
+        pop.set_index("location_id").wpp_population.to_dict().items()
     ):
         block_mask = location_mask == location_id
         pred_total = np.nansum(prediction_array[block_mask])
@@ -120,47 +124,40 @@ def rake_itu_main(
         crs=itu_mask.crs,
         no_data_value=np.nan,
     )
-    pm_data.save_itu_results(raked_pop, iso3, model_spec)
+    pm_data.save_raked_prediction(
+        raked_pop, block_key=iso3, time_point=TIME_POINT, model_spec=model_spec
+    )
 
 
 @click.command()  # type: ignore[arg-type]
-@clio.with_iso3()
-@click.option(
-    "--model-name",
-    required=True,
-    type=click.STRING,
-    help="Name of the model to rake.",
-)
+@clio.with_version()
 @clio.with_resolution()
-@clio.with_input_directory("pop-data", pmc.POPULATION_DATA_ROOT)
+@clio.with_iso3()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def rake_itu_task(
-    iso3: str,
-    model_name: str,
     resolution: str,
-    pop_data_dir: str,
+    version: str,
+    iso3: str,
     output_dir: str,
 ) -> None:
-    rake_itu_main(iso3, model_name, resolution, pop_data_dir, output_dir)
+    rake_itu_main(
+        resolution,
+        version,
+        iso3,
+        output_dir,
+    )
 
 
 @click.command()  # type: ignore[arg-type]
-@clio.with_iso3(allow_all=True)
-@click.option(
-    "--model-name",
-    required=True,
-    type=click.STRING,
-    help="Name of the model to rake.",
-)
 @clio.with_resolution()
-@clio.with_input_directory("pop-data", pmc.POPULATION_DATA_ROOT)
+@clio.with_version()
+@clio.with_iso3(allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def rake_itu(
-    iso3: str,
-    model_name: str,
     resolution: str,
-    pop_data_dir: str,
+    version: str,
+    iso3: str,
     output_dir: str,
     queue: str,
 ) -> None:
@@ -183,11 +180,10 @@ def rake_itu(
             "iso3": iso3s,
         },
         task_args={
-            "model-name": model_name,
             "resolution": resolution,
-            "pop-data-dir": pop_data_dir,
+            "version": version,
             "output-dir": output_dir,
         },
-        max_attempts=3,
-        log_root=pm_data.itu_results,
+        max_attempts=1,
+        log_root=pm_data.log_dir("postprocess_rake_itu"),
     )

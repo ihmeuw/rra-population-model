@@ -10,6 +10,15 @@ from rra_population_model.preprocess.raking_data import (
     utils,
 )
 
+HIERARCHY_KEEP_COLS = [
+    "parent_id",
+    "location_id",
+    "most_detailed",
+    "level",
+    "location_name",
+    "ihme_loc_id",
+]
+
 
 def raking_data_main(  # noqa: PLR0915
     output_dir: str,
@@ -47,9 +56,7 @@ def raking_data_main(  # noqa: PLR0915
     wpp["scalar"] = wpp["population"] / wpp["region_pop"]
     wpp.loc[wpp.population == 0, "scalar"] = 0.0
 
-    h_gbd = hierarchies["gbd"].loc[
-        :, ["parent_id", "location_id", "most_detailed", "level", "location_name"]
-    ]
+    h_gbd = hierarchies["gbd"].loc[:, HIERARCHY_KEEP_COLS]
     p_gbd = populations["gbd"].merge(h_gbd, on="location_id")
     p_gbd = p_gbd.loc[
         p_gbd.year_id <= int(gbd_version), :
@@ -57,9 +64,7 @@ def raking_data_main(  # noqa: PLR0915
 
     # Drop GBD subnationals as they're not present in fhs and will introduce artifacts
     if version_tag == "fhs":
-        h_fhs = hierarchies["fhs"].loc[
-            :, ["parent_id", "location_id", "most_detailed", "level", "location_name"]
-        ]
+        h_fhs = hierarchies["fhs"].loc[:, HIERARCHY_KEEP_COLS]
         p_fhs = populations["fhs"].merge(h_fhs, on="location_id")
         p_gbd = p_gbd[p_gbd.location_id.isin(p_fhs.location_id.unique())]
         most_detailed_locs = p_fhs[p_fhs.most_detailed == 1].location_id.unique()

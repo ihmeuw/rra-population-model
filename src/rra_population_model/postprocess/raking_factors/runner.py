@@ -182,7 +182,7 @@ def raking_factors_task(
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point(choices=None, allow_all=True)
-@click.option("--forecast", is_flag=True)
+@click.option("--extrapolate", is_flag=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_queue()
@@ -190,7 +190,7 @@ def raking_factors(
     resolution: str,
     version: str,
     time_point: str,
-    forecast: bool,
+    extrapolate: bool,
     output_dir: str,
     num_cores: int,
     queue: str,
@@ -200,9 +200,9 @@ def raking_factors(
         resolution, version
     )
     time_points = clio.convert_choice(time_point, prediction_time_points)
-    if forecast:
-        future_time_points = [f"{year}q1" for year in range(2022, 2101)]
-        time_points = sorted(set(time_points) | set(future_time_points))
+    if extrapolate:
+        full_time_series = [f"{y}q1" for y in range(1950, 2101)]
+        time_points = sorted(set(time_points) | set(full_time_series))
 
     print(f"Building raking factors for {len(time_points)} time points.")
 

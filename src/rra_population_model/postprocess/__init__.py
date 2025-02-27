@@ -1,7 +1,6 @@
-from rra_population_model.postprocess.compile_results import (
-    compile_results,
-    compile_results_task,
-    upsample_task,
+from rra_population_model.postprocess.mosaic.runner import (
+    mosaic,
+    mosaic_task,
 )
 from rra_population_model.postprocess.rake.runner import (
     rake,
@@ -15,18 +14,23 @@ from rra_population_model.postprocess.raking_factors.runner import (
     raking_factors,
     raking_factors_task,
 )
+from rra_population_model.postprocess.upsample.runner import (
+    upsample,
+    upsample_task,
+)
 
 RUNNERS = {
     "raking_factors": raking_factors,
     "rake": rake,
     "rake_itu": rake_itu,
-    "compile": compile_results,
+    "mosaic": mosaic,
+    "upsample": upsample,
 }
 
 TASK_RUNNERS = {
     "raking_factors": raking_factors_task,
     "rake": rake_task,
     "rake_itu": rake_itu_task,
-    "compile": compile_results_task,
+    "mosaic": mosaic_task,
     "upsample": upsample_task,
 }

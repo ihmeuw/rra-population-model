@@ -158,6 +158,7 @@ def training_data(
             "project": "proj_rapidresponse",
         },
         max_attempts=5,
+        log_root=pm_data.log_dir("model_prep_training_data"),
     )
 
     if status != "D":
@@ -165,12 +166,5 @@ def training_data(
         raise RuntimeError(msg)
 
     print("Building summary datasets.")
-    people_per_structure, pixel_area_weight = utils.build_summary_data(
-        pm_data, resolution
-    )
-
-    pm_data.save_summary_training_data(
-        resolution,
-        people_per_structure,
-        pixel_area_weight,
-    )
+    people_per_structure = utils.build_summary_people_per_structure(resolution, pm_data)
+    pm_data.save_summary_people_per_structure(people_per_structure, resolution)

@@ -85,22 +85,17 @@ def build_arg_list(
     return to_run
 
 
-def build_summary_data(
+def build_summary_people_per_structure(
     pm_data: PopulationModelData,
     resolution: str,
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+) -> pd.DataFrame:
     tile_dirs = list(pm_data.tile_training_data_root(resolution).iterdir())
-    model_gdfs = []
-    for tile_dir in tqdm.tqdm(tile_dirs):
-        tile_pps = pm_data.load_people_per_structure(resolution, tile_dir.name)
-        tile_paw = pm_data.load_pixel_area_weights(resolution, tile_dir.name)
-        model_gdfs.append((tile_pps, tile_paw))
+    data = pd.concat([
+        pm_data.load_people_per_structure(resolution, tile_dir.name)
+        for tile_dir in tqdm.tqdm(tile_dirs)
+    ], ignore_index=True)
+    return data
 
-    pps, paw = zip(*model_gdfs, strict=False)
-
-    people_per_structure_gdf = pd.concat(pps, ignore_index=True)
-    pixel_area_weight_gdf = pd.concat(paw, ignore_index=True)
-    return people_per_structure_gdf, pixel_area_weight_gdf
 
 
 def safe_divide(

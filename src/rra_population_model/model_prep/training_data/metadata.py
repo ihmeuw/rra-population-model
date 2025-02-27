@@ -54,7 +54,17 @@ def get_training_metadata(
         # for at least one tile it causes a GEOS exception.
         # This should be investigated, but just going with something
         # that appears to work for now.
-        full_shape = intersecting_admins.union_all()
+        try:
+            full_shape = intersecting_admins.union_all()
+        except shapely.errors.GEOSException:
+            # Last ditch effort, actually move around the boundaries a little
+            buffer_size = 0.01 # 1 cm
+            full_shape = (
+                intersecting_admins
+                .buffer(buffer_size)
+                .buffer(-buffer_size)
+                .union_all()
+            )
 
     overlaps = model_frame.intersects(full_shape)
     neighborhood_keys = model_frame[overlaps].tile_key.tolist()

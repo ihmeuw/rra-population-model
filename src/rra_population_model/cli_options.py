@@ -126,7 +126,7 @@ def with_block_key() -> ClickOption[_P, _T]:
         "-b",
         type=click.STRING,
         required=True,
-        help="Block key of block to run.",
+        help="Block key to run.",
     )
 
 

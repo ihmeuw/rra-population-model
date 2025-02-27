@@ -87,6 +87,8 @@ def rake_task(
     rake_main(resolution, version, block_key, time_point, output_dir)
 
 
+# workflow entry point
+
 @click.command()  # type: ignore[arg-type]
 @clio.with_resolution(allow_all=False)
 @clio.with_version()
@@ -103,6 +105,7 @@ def rake(
     pm_data = PopulationModelData(output_dir)
 
     rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)
+
     time_points = clio.convert_choice(time_point, rf_time_points)
 
     model_frame = pm_data.load_modeling_frame(resolution)

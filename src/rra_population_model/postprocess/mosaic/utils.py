@@ -1,7 +1,7 @@
-from pathlib import Path
+import shlex
 import shutil
 import subprocess
-import shlex
+from pathlib import Path
 
 from rra_tools.shell_tools import touch
 

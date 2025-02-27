@@ -89,6 +89,7 @@ def rake_task(
 
 # workflow entry point
 
+
 @click.command()  # type: ignore[arg-type]
 @clio.with_resolution(allow_all=False)
 @clio.with_version()

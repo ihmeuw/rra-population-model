@@ -12,6 +12,7 @@ from rra_population_model.postprocess.utils import check_gdal_installed
 
 STRIDE = 10
 
+
 def mosaic_main(
     resolution: str,
     version: str,
@@ -65,9 +66,7 @@ def mosaic_task(
     output_dir: str,
     num_cores: int,
 ) -> None:
-    mosaic_main(
-        resolution, version, bx, by, time_point, output_dir, num_cores
-    )
+    mosaic_main(resolution, version, bx, by, time_point, output_dir, num_cores)
 
 
 @click.command()  # type: ignore[arg-type]

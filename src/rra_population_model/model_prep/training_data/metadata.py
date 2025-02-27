@@ -58,12 +58,9 @@ def get_training_metadata(
             full_shape = intersecting_admins.union_all()
         except shapely.errors.GEOSException:
             # Last ditch effort, actually move around the boundaries a little
-            buffer_size = 0.01 # 1 cm
+            buffer_size = 0.01  # 1 cm
             full_shape = (
-                intersecting_admins
-                .buffer(buffer_size)
-                .buffer(-buffer_size)
-                .union_all()
+                intersecting_admins.buffer(buffer_size).buffer(-buffer_size).union_all()
             )
 
     overlaps = model_frame.intersects(full_shape)

@@ -538,7 +538,7 @@ class PopulationModelData:
         resolution: str,
     ) -> None:
         root = self.training_data_root(resolution)
-        path = root / f"people_per_structure.parquet"
+        path = root / "people_per_structure.parquet"
         touch(path, clobber=True)
         data.to_parquet(path)
 

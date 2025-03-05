@@ -19,6 +19,9 @@ from db_queries import (  # type: ignore[import-not-found]
     get_location_metadata,
     get_population,
 )
+from db_queries.api.internal import (  # type: ignore[import-not-found]
+    get_location_hierarchy_by_version,
+)
 from rra_tools.shell_tools import mkdir, touch
 
 GBD_RELEASE_ID = 9
@@ -27,6 +30,8 @@ FHS_RELEASE_ID = 9
 GBD_LOCATION_SET_ID = 22
 FHS_LOCATION_SET_ID = 39
 LSAE_LOCATION_SET_ID = 125
+LAST_LSAE_LSVID = 1209
+CURRENT_LSAE_LSVID = 1285
 
 
 MODEL_ROOT = Path("/mnt/team/rapidresponse/pub/population-model")
@@ -48,7 +53,7 @@ def load_gbd_populations(location_set_id: int, release_id: int) -> pd.DataFrame:
 
 
 def load_fhs_population(*args: Any, **kwargs: Any) -> pd.DataFrame:
-    pop_fhs_path = "/mnt/share/forecasting/data/9/future/population/20250219_draining_fix_old_pop_v5/summary/summary.nc"
+    pop_fhs_path = f"/mnt/share/forecasting/data/{FHS_RELEASE_ID}/future/population/20250219_draining_fix_old_pop_v5/summary/summary.nc"
     return (  # type: ignore[no-any-return]
         xr.open_dataset(pop_fhs_path)
         .sel(scenario=0, statistic="mean", sex_id=3, age_group_id=22)
@@ -136,13 +141,23 @@ def cache_raking_data(model_root: str) -> None:
         "gbd_2021": (GBD_LOCATION_SET_ID, GBD_RELEASE_ID),
         "gbd_2023": (GBD_LOCATION_SET_ID, GBD2023_RELEASE_ID),
         "fhs_2021": (FHS_LOCATION_SET_ID, FHS_RELEASE_ID),
-        "lsae": (LSAE_LOCATION_SET_ID, GBD2023_RELEASE_ID),
     }
     for name, (location_set_id, release_id) in hierarchy_specs.items():
         print(f"Caching hierarchy for {name}")
         h = get_location_metadata(
             location_set_id=location_set_id, release_id=release_id
         )
+        out_path = data_out_root / f"hierarchy_{name}.parquet"
+        touch(out_path, clobber=True)
+        h.to_parquet(out_path)
+
+    lsae_hierarchy_specs = {
+        "lsae_1209": LAST_LSAE_LSVID,
+        "lsae_1285": CURRENT_LSAE_LSVID,
+    }
+    for name, lsvid in lsae_hierarchy_specs.items():
+        print(f"Caching LSAE hierarchy for {name}")
+        h = get_location_hierarchy_by_version(lsvid)
         out_path = data_out_root / f"hierarchy_{name}.parquet"
         touch(out_path, clobber=True)
         h.to_parquet(out_path)
@@ -165,13 +180,34 @@ def cache_raking_data(model_root: str) -> None:
     gbd_2023_shape_path = Path(
         "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2023/master/shapefiles/GBD2023_analysis_final_loc_set_22.shp"
     )
-    lsae_shape_root = Path("/home/j/WORK/11_geospatial/admin_shapefiles/current/")
+    lsae_shape_root = Path("/home/j/WORK/11_geospatial/admin_shapefiles/")
     shape_loaders = {
         "gbd_2021": (load_gbd_shapes, gbd_2021_shape_path),
         "gbd_2023": (load_gbd_shapes, gbd_2023_shape_path),
-        "lsae_a0": (load_lsae_shapes, lsae_shape_root / "lbd_standard_admin_0.shp"),
-        "lsae_a1": (load_lsae_shapes, lsae_shape_root / "lbd_standard_admin_1.shp"),
-        "lsae_a2": (load_lsae_shapes, lsae_shape_root / "lbd_standard_admin_2.shp"),
+        "lsae_1209_a0": (
+            load_lsae_shapes,
+            lsae_shape_root / "2023_10_30" / "lbd_standard_admin_0.shp",
+        ),
+        "lsae_1209_a1": (
+            load_lsae_shapes,
+            lsae_shape_root / "2023_10_30" / "lbd_standard_admin_1.shp",
+        ),
+        "lsae_1209_a2": (
+            load_lsae_shapes,
+            lsae_shape_root / "2023_10_30" / "lbd_standard_admin_2.shp",
+        ),
+        "lsae_1285_a0": (
+            load_lsae_shapes,
+            lsae_shape_root / "2024_07_29" / "lbd_standard_admin_0.shp",
+        ),
+        "lsae_1285_a1": (
+            load_lsae_shapes,
+            lsae_shape_root / "2024_07_29" / "lbd_standard_admin_1.shp",
+        ),
+        "lsae_1285_a2": (
+            load_lsae_shapes,
+            lsae_shape_root / "2024_07_29" / "lbd_standard_admin_2.shp",
+        ),
     }
     for name, (loader, path) in shape_loaders.items():
         print(f"Caching shape for {name}")

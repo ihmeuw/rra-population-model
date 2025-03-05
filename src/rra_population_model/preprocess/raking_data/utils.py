@@ -1,7 +1,14 @@
+from __future__ import annotations
+
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 from rra_population_model.data import PopulationModelData
+from rra_population_model.preprocess.raking_data.metadata import (
+    NO_REGION_ID,
+    SUPPLEMENT,
+)
 
 ###########
 # Loaders #
@@ -43,13 +50,13 @@ def load_wpp_populations(
     return wpp
 
 
-def load_populations(
-    pm_data: PopulationModelData, gbd_version: str, wpp_version: str
+def load_ihme_populations(
+    pm_data: PopulationModelData,
+    gbd_version: str,
 ) -> dict[str, pd.DataFrame]:
     populations = {
         "gbd": pm_data.load_gbd_raking_input("population", f"gbd_{gbd_version}"),
         "fhs": pm_data.load_gbd_raking_input("population", f"fhs_{gbd_version}"),
-        "wpp": load_wpp_populations(pm_data, wpp_version),
     }
     return populations
 
@@ -60,8 +67,17 @@ def load_hierarchies(
     hierarchies = {
         "gbd": pm_data.load_gbd_raking_input("hierarchy", f"gbd_{gbd_version}"),
         "fhs": pm_data.load_gbd_raking_input("hierarchy", f"fhs_{gbd_version}"),
-        "lsae": pm_data.load_gbd_raking_input("hierarchy", "lsae"),
     }
+    keep_cols = [
+        "location_id",
+        "location_name",
+        "ihme_loc_id",
+        "parent_id",
+        "region_id",
+        "level",
+        "most_detailed",
+    ]
+    hierarchies = {k: v.loc[:, keep_cols] for k, v in hierarchies.items()}
     return hierarchies
 
 
@@ -70,8 +86,10 @@ def load_shapes(
 ) -> dict[str, gpd.GeoDataFrame]:
     shapes = {
         "gbd": pm_data.load_gbd_raking_input("shapes", f"gbd_{gbd_version}"),
-        "lsae": pm_data.load_gbd_raking_input("shapes", "lsae_a0"),
+        "lsae": pm_data.load_gbd_raking_input("shapes", "lsae_1285_a0"),
     }
+    keep_cols = ["location_id", "geometry"]
+    shapes = {k: v.loc[:, keep_cols] for k, v in shapes.items()}
     return shapes
 
 
@@ -120,165 +138,218 @@ def make_location_region_mapping(
 
 
 def add_gbd_metadata_to_wpp(
-    wpp: pd.DataFrame, gbd_hierarchy: pd.DataFrame, lsae_hierarchy: pd.DataFrame
+    wpp: pd.DataFrame,
+    gbd_hierarchy: pd.DataFrame,
+    supplemental_metadata: pd.DataFrame,
 ) -> pd.DataFrame:
     keep_cols = ["location_id", "location_name", "region_id", "ihme_loc_id"]
     a0_level = 3
     country_mask = gbd_hierarchy["level"] == a0_level
     gbd_metadata = gbd_hierarchy.loc[country_mask, keep_cols].copy()
+    gbd_metadata["region_id"] = gbd_metadata["region_id"].astype(int)
 
-    # This is a manual mapping of locations that are not linked in the IHME mapping file
-    # from the GBD location id to the GBD region in which they reside.
-    # We'll grab the additional iso3 and location name metadata from the LSAE location hierarchy
-    # since they are not present in the GBD hierarchy. We have to manually include the region_id
-    # because the LSAE hierarchy does not consider regions in their hierarchy.
-    wpp_missing_metadata = [
-        # Tuples of (location_id, region_id)
-        # From the IHME mapping file /home/j/DATA/IHME_COUNTRY_CODES/IHME_COUNTRY_CODES_Y2013M07D26.CSV
-        (299, 104),  # Anguilla
-        (300, 104),  # Aruba
-        (313, 104),  # Cayman Islands
-        (331, 96),  # Falkland Islands (Islas Malvinas)
-        (332, 73),  # Faroe Islands
-        (338, 104),  # French Guiana
-        (339, 21),  # French Polynesia
-        (345, 73),  # Gibraltar
-        (350, 104),  # Guadeloupe
-        (352, 73),  # Guernsey
-        (353, 73),  # Holy See (Vatican City)
-        (355, 73),  # Isle of Man
-        (356, 73),  # Jersey
-        (360, 73),  # Liechtenstein
-        (363, 104),  # Martinique
-        (368, 104),  # Montserrat
-        (372, 21),  # New Caledonia
-        (387, 9),  # Reunion
-        (391, 104),  # Saint Barthelemy
-        (394, 104),  # Saint Martin
-        (395, 100),  # Saint Pierre and Miquelon
-        (415, 104),  # Turks and Caicos Islands
-        (421, 104),  # British Virgin Islands
-        (423, 21),  # Wallis and Futuna Islands
-        (424, 138),  # Western Sahara
-        # Countries not linked in the IHME mapping file
-        (60922, 174),  # Bonaire, Sint Eustatius and Saba
-        (4641, 104),  # Curacao
-        (364, 174),  # Mayotte
-        (4642, 174),  # Sint Maarten (Dutch part)
-        # Replaced from the IHME mapping file
-        (
-            60927,
-            199,
-        ),  # Saint Helena, Ascension, and Tristan da Cunha, replaced (392, 199) with LSAE def
-    ]
-    # The LSAE hierarchy is missing some iso3 codes, so we'll manually add them here
-    supplemental_iso_codes = {
-        60922: "BES",
-        4641: "CUW",
-        4642: "SXM",
-        60927: "SHN",
-    }
-    missing_df = make_location_region_mapping(
-        missing_region_metadata=wpp_missing_metadata,
-        reference_hierarchy=lsae_hierarchy,
-        supplemental_codes=supplemental_iso_codes,
+    wpp_supplement = supplemental_metadata.loc[
+        supplemental_metadata.category == SUPPLEMENT.WPP
+    ].drop(columns=["category"])
+
+    ihme_metadata = pd.concat(
+        [
+            gbd_metadata,
+            wpp_supplement,
+        ],
+        ignore_index=True,
     )
 
-    ihme_metadata = pd.concat([gbd_metadata, missing_df], axis=0, ignore_index=True)
-
-    wpp = wpp.merge(
-        ihme_metadata, left_on="iso3", right_on="ihme_loc_id", how="left"
-    ).drop(columns="iso3")
-
-    wpp["location_id"] = wpp["location_id"].astype(int)
-    wpp["region_id"] = wpp["region_id"].astype(int)
-
-    # Check for missing metadata
-    for column in ["location_id", "region_id", "location_name", "ihme_loc_id"]:
-        if wpp[column].isna().any():
-            msg = f"Missing metadata for {column} in WPP data"
-            raise ValueError(msg)
-
+    wpp = (
+        wpp.merge(ihme_metadata, left_on="iso3", right_on="ihme_loc_id", how="left")
+        .drop(columns="iso3")
+        .sort_values(["location_id", "year_id"])
+    )
     return wpp
 
 
-def supplement_wpp(wpp: pd.DataFrame, lsae_hierarchy: pd.DataFrame) -> pd.DataFrame:
-    # These locations are not present in either WPP or GBD, but have
-    # admin0 level data in the LSAE hierarchy. Some of them are entirely unmodeled
-    # and not included in regional aggregates (either intentionally or by mistake)
-    # while others just have no population and so don't appear in either hierarchy.
+def add_unmodeled_and_zero_population_locations(
+    wpp: pd.DataFrame,
+    supplemental_metadata: pd.DataFrame,
+) -> pd.DataFrame:
+    data = [wpp]
 
-    unmodeled_locations = [
-        # Tuples of (location_id, region_id)
-        # These are in the IHME mapping but have no WPP estimates
-        (297, 73),  # Aland Islands
-        (318, 9),  # Christmas Island
-        (319, 9),  # Cocos (Keeling) Islands
-        (375, 21),  # Norfolk Island
-        (382, 21),  # Pitcairn Islands
-        (411, 73),  # Svalbard and Jan Mayen
-        # These are not present in the IHME mapping and have no WPP estimates
-        (296, 73),  # Akrotiri and Dhekelia
-        (53483, 73),  # Northern Cyprus
-        (311, 73),  # Canary Islands
-    ]
-    supplemental_iso_codes = {
-        60348: "ATF",
-        60924: "HMD",
-        60928: "UMI",
-        60931: "ZZZ",
-        60930: "ZZZ",
-        93924: "ZZZ",
-        94026: "ZZZ",
-        94027: "ZZZ",
+    value_map = {
+        SUPPLEMENT.UNMODELED: np.nan,
+        SUPPLEMENT.ZERO_POPULATION: 0,
     }
-    unmodeled_df = make_location_region_mapping(
-        missing_region_metadata=unmodeled_locations,
-        reference_hierarchy=lsae_hierarchy,
-        supplemental_codes=supplemental_iso_codes,
-    )
-    values = pd.DataFrame(
-        {
-            "year_id": sorted(wpp["year_id"].unique()),
-            "population": float("nan"),
-        }
-    )
-    unmodeled_df = unmodeled_df.merge(values, how="cross")
 
-    zero_population_locations = [
-        # Tuples of (location_id, region_id)
-        (60921, -1),  # Antarctica
-        (94026, 70),  # Ashmore and Cartier Islands, Australasia
-        (60923, -1),  # Bouvet Island, near antarctica
-        (60925, 159),  # British Indian Ocean Territory, South Asia
-        (60930, 124),  # Clipperton Island, Central Latin America
-        (94027, 70),  # Coral Sea Islands Territory, Australasia
-        (60348, 174),  # French Southern Territories, Eastern SSA
-        (60924, 70),  # Heard Island and McDonald Islands, Australasia
-        (60931, 5),  # Paracel Islands, East Asia
-        (
-            60926,
-            96,
-        ),  # South Georgia and the South Sandwich Islands, Southern Latin America
-        (93924, 9),  # Spratly Islands, Southeast Asia
-        (60928, 100),  # High income North America
-    ]
-    supplemental_iso_codes = {
-        60348: "ATF",
-        60924: "HMD",
-        60928: "UMI",
-    }
-    zero_df = make_location_region_mapping(
-        missing_region_metadata=zero_population_locations,
-        reference_hierarchy=lsae_hierarchy,
-        supplemental_codes=supplemental_iso_codes,
-    )
-    values = pd.DataFrame(
-        {
-            "year_id": sorted(wpp["year_id"].unique()),
-            "population": 0,
-        }
-    )
-    zero_df = zero_df.merge(values, how="cross")
+    for category, value in value_map.items():
+        meta = supplemental_metadata.loc[
+            supplemental_metadata["category"] == category
+        ].drop(columns=["category"])
+        year_values = pd.DataFrame(
+            {
+                "year_id": sorted(wpp["year_id"].unique()),
+                "population": value,
+            }
+        )
+        data.append(meta.merge(year_values, how="cross"))
 
-    return pd.concat([wpp, unmodeled_df, zero_df], axis=0, ignore_index=True)
+    return pd.concat(data, ignore_index=True).sort_values(["location_id", "year_id"])
+
+
+def compute_regional_scalar(
+    wpp: pd.DataFrame,
+) -> pd.Series[float]:
+    region_pop = wpp.groupby(["region_id", "year_id"])["population"].transform("sum")
+    scalar = wpp["population"] / region_pop
+    scalar[wpp["population"] == 0] = 0.0
+    return scalar
+
+
+def prepare_ihme_population(
+    populations: dict[str, pd.DataFrame],
+    hierarchies: dict[str, gpd.GeoDataFrame],
+    version_tag: str,
+) -> pd.DataFrame:
+    p_gbd = populations["gbd"].merge(hierarchies["gbd"], on="location_id")
+
+    if version_tag == "fhs":
+        p_fhs = populations["fhs"].merge(hierarchies["fhs"], on="location_id")
+        keep_mask = (
+            # Drop years in GBD that are present in FHS
+            ~p_gbd.year_id.isin(p_fhs.year_id.unique())
+            # Drop GBD subnationals that are not in FHS so we don't get artifacts in raking
+            & p_gbd.location_id.isin(p_fhs.location_id.unique())
+        )
+        p_gbd = p_gbd.loc[keep_mask]
+        # Update most-detailed metadata to match FHS
+        fhs_most_detailed = p_gbd.location_id.isin(
+            p_fhs.loc[p_fhs.most_detailed == 1].location_id.unique()
+        )
+        p_gbd.loc[fhs_most_detailed, "most_detailed"] = 1
+        assert (p_gbd.loc[~fhs_most_detailed].most_detailed == 0).all()  # noqa: S101
+        pop = pd.concat([p_gbd, p_fhs], ignore_index=True)
+    elif version_tag == "gbd":
+        pop = p_gbd
+    else:
+        msg = f"Unsupported version tag: {version_tag}"
+        raise ValueError(msg)
+    pop["region_id"] = pop["region_id"].fillna(NO_REGION_ID).astype(int)
+    return pop.sort_values(["location_id", "year_id"])
+
+
+def compute_missing_populations(
+    wpp: pd.DataFrame,
+    ihme: pd.DataFrame,
+) -> pd.DataFrame:
+    # Subset to the wpp locations and years we're
+    # using to fill in the missing populations.
+    keep_mask = ~wpp.location_id.isin(ihme.location_id.unique()) & (
+        wpp.year_id.isin(ihme.year_id.unique())
+    )
+    wpp_subset = (
+        wpp.loc[keep_mask]
+        .set_index(["region_id", "year_id"])
+        .drop(columns=["population"])
+    )
+
+    # Get the remaining population to distribute by grabbing the regional populations
+    # which are inclusive of unmodeled locations and subtracting the sum of the most
+    # detailed locations within each region.
+    region_pop = ihme.loc[ihme.location_id == ihme.region_id].set_index(
+        ["region_id", "year_id"]
+    )["population"]
+    region_agg = (
+        ihme.loc[ihme.most_detailed == 1]
+        .groupby(["region_id", "year_id"])["population"]
+        .sum()
+    )
+    # Clip to zero to avoid negative populations due to rounding errors.
+    pop_to_distribute = (region_pop - region_agg).clip(lower=0.0)
+
+    no_region_pop = pd.DataFrame(
+        {"region_id": -1, "year_id": ihme["year_id"].unique(), "population": 0}
+    ).set_index(["region_id", "year_id"])
+    pop_to_distribute = pd.concat([pop_to_distribute, no_region_pop])["population"]
+
+    # Get a scalar for the remaining population to distribute from the scalar for the
+    # entire regional population by renormalizing in our subset.
+    adjusted_scalar = wpp_subset["scalar"].divide(
+        wpp_subset.groupby(["region_id", "year_id"])["scalar"].transform("sum")
+    )
+    adjusted_scalar[wpp_subset["scalar"] == 0] = 0.0
+
+    scaled_population = pop_to_distribute.loc[adjusted_scalar.index].multiply(
+        adjusted_scalar
+    )
+
+    missing_populations = (
+        wpp_subset.drop(columns=["scalar"])
+        .assign(
+            population=scaled_population.values,
+            most_detailed=1,
+            level=3,
+        )
+        .reset_index()
+        .drop(columns=["region_id"])
+        .sort_values(["location_id", "year_id"])
+    )
+
+    return missing_populations
+
+
+def build_raking_population(
+    ihme_population: pd.DataFrame,
+    wpp_population: pd.DataFrame,
+    missing_population: pd.DataFrame,
+) -> pd.DataFrame:
+    ihme_population = ihme_population[ihme_population.most_detailed == 1]
+
+    full_population = (
+        pd.concat([ihme_population, missing_population], ignore_index=True)
+        .sort_values(["location_id", "year_id"])
+        .reset_index(drop=True)
+    )
+
+    # Add on a column with WPP population for UN product raking
+    full_population = full_population.merge(
+        wpp_population[["location_id", "year_id", "population"]].rename(
+            columns={"population": "wpp_population"}
+        ),
+        on=["location_id", "year_id"],
+        how="left",
+    )
+
+    return full_population
+
+
+def build_raking_shapes(
+    shapes: dict[str, gpd.GeoDataFrame],
+    raking_population: pd.DataFrame,
+) -> gpd.GeoDataFrame:
+    ihme_shapes = shapes["gbd"]
+    keep_mask = ihme_shapes["location_id"].isin(raking_population["location_id"])
+    ihme_shapes = ihme_shapes.loc[keep_mask]
+
+    lsae_shapes = shapes["lsae"]
+    keep_mask = lsae_shapes["location_id"].isin(
+        raking_population["location_id"]
+    ) & ~lsae_shapes["location_id"].isin(ihme_shapes["location_id"])
+    missing_shapes = lsae_shapes.loc[keep_mask]
+
+    full_shapes = pd.concat(
+        [ihme_shapes, missing_shapes], ignore_index=True
+    ).sort_values("location_id")
+
+    return full_shapes
+
+
+def validate_raking_data(
+    raking_population: pd.DataFrame,
+    raking_shapes: gpd.GeoDataFrame,
+) -> None:
+    extra = set(raking_shapes.location_id) - set(raking_population.location_id)
+    missing = set(raking_population.location_id) - set(raking_shapes.location_id)
+    if extra:
+        msg = f"Extra location_ids in shapes: {sorted(extra)}"
+        raise ValueError(msg)
+    if missing:
+        msg = f"Missing location_ids in shapes: {sorted(missing)}"
+        raise ValueError(msg)

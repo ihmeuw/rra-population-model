@@ -104,6 +104,7 @@ ignore = [
     "RUF007",   # zip is idiomatic, this check is dumb.
     "RET505",   # Else after return, too many false positives.
     "E501",     # Line too long, handled by ruff format
+    "TC001",    # Type-checking internal modules.
     "TC002",    # Type-checking on 3rd party packages.
     "PLR0913",  # We have a long of function args a lot, and making better datastru
 ]

@@ -18,7 +18,7 @@ from rra_population_model.preprocess.raking_data.metadata import (
 def load_wpp_populations(
     pm_data: PopulationModelData, wpp_version: str
 ) -> pd.DataFrame:
-    if wpp_version == "2022":
+    if wpp_version in ["2022", "2024"]:
         wpp = pm_data.load_gbd_raking_input("population", f"wpp_{wpp_version}")
         # Merge Hong Kong, Macau, and Kosovo into China and Serbia, respectively
         merge_map = {
@@ -41,9 +41,6 @@ def load_wpp_populations(
                 .sort_values(["iso3", "year_id"])
                 .reset_index(drop=True)
             )
-    elif wpp_version == "2024":
-        msg = "We still need to implement/validate the merge_map for WPP 2024"
-        raise NotImplementedError(msg)
     else:
         msg = f"Invalid WPP version: {wpp_version}"
         raise ValueError(msg)
@@ -56,8 +53,11 @@ def load_ihme_populations(
 ) -> dict[str, pd.DataFrame]:
     populations = {
         "gbd": pm_data.load_gbd_raking_input("population", f"gbd_{gbd_version}"),
-        "fhs": pm_data.load_gbd_raking_input("population", f"fhs_{gbd_version}"),
     }
+    if gbd_version == "2021":
+        populations["fhs"] = pm_data.load_gbd_raking_input(
+            "population", f"fhs_{gbd_version}"
+        )
     return populations
 
 
@@ -66,8 +66,11 @@ def load_hierarchies(
 ) -> dict[str, pd.DataFrame]:
     hierarchies = {
         "gbd": pm_data.load_gbd_raking_input("hierarchy", f"gbd_{gbd_version}"),
-        "fhs": pm_data.load_gbd_raking_input("hierarchy", f"fhs_{gbd_version}"),
     }
+    if gbd_version == "2021":
+        hierarchies["fhs"] = pm_data.load_gbd_raking_input(
+            "hierarchy", f"fhs_{gbd_version}"
+        )
     keep_cols = [
         "location_id",
         "location_name",
@@ -82,12 +85,22 @@ def load_hierarchies(
 
 
 def load_shapes(
-    pm_data: PopulationModelData, gbd_version: str
+    pm_data: PopulationModelData,
+    gbd_version: str,
 ) -> dict[str, gpd.GeoDataFrame]:
     shapes = {
         "gbd": pm_data.load_gbd_raking_input("shapes", f"gbd_{gbd_version}"),
         "lsae": pm_data.load_gbd_raking_input("shapes", "lsae_1285_a0"),
     }
+    if gbd_version == "2023":
+        h = pm_data.load_gbd_raking_input("hierarchy", "gbd_2023")
+        to_drop = ~shapes["gbd"].location_id.isin(h.location_id)
+        # There are 150 UTLAs that were dropped late from the GBD hierarchy
+        # but haven't been updated in the shapefile yet.
+        utla_count = 150
+        assert to_drop.sum() == utla_count  # noqa: S101
+        shapes["gbd"] = shapes["gbd"].loc[~to_drop]
+
     keep_cols = ["location_id", "geometry"]
     shapes = {k: v.loc[:, keep_cols] for k, v in shapes.items()}
     return shapes
@@ -219,11 +232,25 @@ def prepare_ihme_population(
             & p_gbd.location_id.isin(p_fhs.location_id.unique())
         )
         p_gbd = p_gbd.loc[keep_mask]
-        # Update most-detailed metadata to match FHS
+        # Backfill FHS metadata to GBD for consistency
+        fhs_meta = p_fhs[
+            [
+                "location_id",
+                "location_name",
+                "ihme_loc_id",
+                "parent_id",
+                "region_id",
+                "level",
+                "most_detailed",
+            ]
+        ].drop_duplicates()
+        p_gbd = p_gbd[["location_id", "year_id", "population"]].merge(
+            fhs_meta, on="location_id"
+        )
+
         fhs_most_detailed = p_gbd.location_id.isin(
             p_fhs.loc[p_fhs.most_detailed == 1].location_id.unique()
         )
-        p_gbd.loc[fhs_most_detailed, "most_detailed"] = 1
         assert (p_gbd.loc[~fhs_most_detailed].most_detailed == 0).all()  # noqa: S101
         pop = pd.concat([p_gbd, p_fhs], ignore_index=True)
     elif version_tag == "gbd":
@@ -282,13 +309,13 @@ def compute_missing_populations(
 
     missing_populations = (
         wpp_subset.drop(columns=["scalar"])
+        .reset_index()
         .assign(
             population=scaled_population.values,
             most_detailed=1,
             level=3,
+            parent_id=lambda x: x["region_id"],
         )
-        .reset_index()
-        .drop(columns=["region_id"])
         .sort_values(["location_id", "year_id"])
     )
 
@@ -300,14 +327,13 @@ def build_raking_population(
     wpp_population: pd.DataFrame,
     missing_population: pd.DataFrame,
 ) -> pd.DataFrame:
-    ihme_population = ihme_population[ihme_population.most_detailed == 1]
+    ihme_most_detailed = ihme_population[ihme_population.most_detailed == 1]
 
     full_population = (
-        pd.concat([ihme_population, missing_population], ignore_index=True)
+        pd.concat([ihme_most_detailed, missing_population], ignore_index=True)
         .sort_values(["location_id", "year_id"])
         .reset_index(drop=True)
     )
-
     # Add on a column with WPP population for UN product raking
     full_population = full_population.merge(
         wpp_population[["location_id", "year_id", "population"]].rename(
@@ -316,6 +342,46 @@ def build_raking_population(
         on=["location_id", "year_id"],
         how="left",
     )
+
+    # Fill in missing WPP populations in GBD subnationals by scaling
+    # the wpp parent population by the GBD parent population fraction.
+    wpp_missing = (
+        full_population["wpp_population"].isna() & full_population["population"].notna()
+    )
+    parent_map = ihme_population.set_index("location_id")["parent_id"]
+    parent_map = parent_map[~parent_map.index.duplicated()]
+    to_fill = (
+        full_population.loc[wpp_missing, ["location_id", "year_id", "population"]]
+        .assign(parent_id=lambda x: x["location_id"])
+        .rename(columns={"population": "gbd_population"})
+    )
+
+    still_missing = ~to_fill["parent_id"].isin(wpp_population["location_id"])
+    while still_missing.any():
+        to_fill.loc[still_missing, "parent_id"] = parent_map.loc[
+            to_fill.loc[still_missing, "parent_id"]
+        ].to_numpy()
+        still_missing = ~to_fill["parent_id"].isin(wpp_population["location_id"])
+
+    to_fill = to_fill.merge(
+        wpp_population[["location_id", "year_id", "population"]].rename(
+            columns={"population": "wpp_parent_population", "location_id": "parent_id"}
+        ),
+        on=["parent_id", "year_id"],
+        how="left",
+    ).merge(
+        ihme_population[["location_id", "year_id", "population"]].rename(
+            columns={"population": "gbd_parent_population", "location_id": "parent_id"}
+        ),
+        on=["parent_id", "year_id"],
+        how="left",
+    )
+    to_fill["wpp_population"] = to_fill["wpp_parent_population"] * (
+        to_fill["gbd_population"] / to_fill["gbd_parent_population"]
+    )
+    full_population.loc[wpp_missing, "wpp_population"] = to_fill[
+        "wpp_population"
+    ].to_numpy()
 
     return full_population
 

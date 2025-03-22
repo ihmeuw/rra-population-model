@@ -1,3 +1,4 @@
+import itertools
 import warnings
 from enum import StrEnum
 from pathlib import Path
@@ -26,7 +27,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v4", "r2023a"]
+    version: Literal["v4", "v6", "r2023a"]
     time_points: list[str]
     measures: list[str]
     denominators: list[str]
@@ -47,7 +48,7 @@ class BuiltVersion(BaseModel):
     @model_validator(mode="after")
     def validate_version(self) -> Self:
         version_map = {
-            "microsoft": ["v4"],
+            "microsoft": ["v4", "v6"],
             "ghsl": ["r2023a"],
         }
         allowed_version = version_map[self.provider]
@@ -100,6 +101,15 @@ BUILT_VERSIONS = {
         provider="microsoft",
         version="v4",
         time_points=["2023q4"],
+        measures=["density"],
+        denominators=["density"],
+    ),
+    "microsoft_v6": BuiltVersion(
+        provider="microsoft",
+        version="v6",
+        time_points=[
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
+        ][1:],
         measures=["density"],
         denominators=["density"],
     ),

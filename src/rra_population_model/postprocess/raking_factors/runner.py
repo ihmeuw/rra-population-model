@@ -14,12 +14,14 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
+RAKING_VERSION = "gbd_2023"
+
 
 def load_admin_populations(
     pm_data: PopulationModelData,
     time_point: str,
 ) -> gpd.GeoDataFrame:
-    raking_pop = pm_data.load_raking_population(version="fhs_2021_wpp_2022")
+    raking_pop = pm_data.load_raking_population(version=RAKING_VERSION)
     all_pop = raking_pop.loc[raking_pop.most_detailed == 1].set_index(
         ["year_id", "location_id"]
     )["population"]
@@ -38,7 +40,7 @@ def load_admin_populations(
         year = int(time_point)
         pop = all_pop.loc[year]
 
-    admins = pm_data.load_raking_shapes(version="fhs_2021_wpp_2022")
+    admins = pm_data.load_raking_shapes(version=RAKING_VERSION)
     pop = admins[["location_id", "geometry"]].merge(pop, on="location_id")
     return pop
 

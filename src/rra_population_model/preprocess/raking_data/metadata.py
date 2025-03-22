@@ -202,8 +202,20 @@ def load_supplmental_metadata() -> pd.DataFrame:
                 "ATF",
                 SUPPLEMENT.ZERO_POPULATION,
             ),
-            (60921, "Antarctica", NO_REGION_ID, "ATA", SUPPLEMENT.ZERO_POPULATION),
-            (60923, "Bouvet Island", NO_REGION_ID, "BVT", SUPPLEMENT.ZERO_POPULATION),
+            (
+                60921,
+                "Antarctica",
+                SOUTHERN_LATIN_AMERICA,
+                "ATA",
+                SUPPLEMENT.ZERO_POPULATION,
+            ),
+            (
+                60923,
+                "Bouvet Island",
+                SOUTHERN_LATIN_AMERICA,
+                "BVT",
+                SUPPLEMENT.ZERO_POPULATION,
+            ),
             # ISO3 manually set
             (
                 60924,

@@ -8,6 +8,8 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.preprocess.raking_data.metadata import (
     NO_REGION_ID,
     SUPPLEMENT,
+    TO_DROP_PARENTS,
+    TO_USE_LSAE_SHAPES,
 )
 
 ###########
@@ -222,6 +224,10 @@ def prepare_ihme_population(
     version_tag: str,
 ) -> pd.DataFrame:
     p_gbd = populations["gbd"].merge(hierarchies["gbd"], on="location_id")
+    # First clear out UK UTLAs, India urban/rural splits, and NZ Maori/non-Maori splits
+    # These do not have accurate geometries in the GBD shapefiles.
+    p_gbd = p_gbd[~p_gbd.parent_id.isin(TO_DROP_PARENTS)]
+    p_gbd.loc[p_gbd.location_id.isin(TO_DROP_PARENTS), "most_detailed"] = 1
 
     if version_tag == "fhs":
         p_fhs = populations["fhs"].merge(hierarchies["fhs"], on="location_id")
@@ -391,7 +397,12 @@ def build_raking_shapes(
     raking_population: pd.DataFrame,
 ) -> gpd.GeoDataFrame:
     ihme_shapes = shapes["gbd"]
-    keep_mask = ihme_shapes["location_id"].isin(raking_population["location_id"])
+    keep_mask = (
+        ihme_shapes["location_id"].isin(raking_population["location_id"])
+        # We want LSAE definitions for a few places to resolve definition
+        # issues and some overlaps in the GBD hierarchy.
+        & ~ihme_shapes["location_id"].isin(TO_USE_LSAE_SHAPES)
+    )
     ihme_shapes = ihme_shapes.loc[keep_mask]
 
     lsae_shapes = shapes["lsae"]

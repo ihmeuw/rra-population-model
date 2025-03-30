@@ -183,6 +183,7 @@ def raking_factors_task(
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
+@clio.with_copy_from_version()
 @clio.with_time_point(choices=None, allow_all=True)
 @click.option("--extrapolate", is_flag=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
@@ -191,6 +192,7 @@ def raking_factors_task(
 def raking_factors(
     resolution: str,
     version: str,
+    copy_from_version: str | None,
     time_point: str,
     extrapolate: bool,
     output_dir: str,
@@ -198,6 +200,8 @@ def raking_factors(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
+    pm_data.maybe_copy_version(resolution, version, copy_from_version)
+
     prediction_time_points = pm_data.list_raw_prediction_time_points(
         resolution, version
     )

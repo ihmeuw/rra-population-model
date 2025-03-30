@@ -28,11 +28,9 @@ def raking_data_main(
     shapes = utils.load_shapes(pm_data, gbd_version=gbd_version)
     supplemental_metadata = load_supplmental_metadata()
 
-    # WPP
+    print("Building WPP data...")
     wpp_version = "2024" if out_version == "gbd_2023" else "2022"
     wpp = utils.load_wpp_populations(pm_data, wpp_version=wpp_version)
-
-    print("Building WPP data...")
     # Add GBD location and region ids to the WPP data by mapping on iso3 codes
     wpp = utils.add_gbd_metadata_to_wpp(
         wpp=wpp,

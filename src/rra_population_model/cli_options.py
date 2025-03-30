@@ -115,6 +115,15 @@ def with_version[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     )
 
 
+def with_copy_from_version[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
+    return click.option(
+        "--copy-from-version",
+        type=click.STRING,
+        help="Version of the model to copy predictions from. Used if we're "
+        "raking a set of predictions to multiple raking targets.",
+    )
+
+
 def with_block_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--block-key",

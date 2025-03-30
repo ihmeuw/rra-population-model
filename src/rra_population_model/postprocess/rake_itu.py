@@ -182,6 +182,7 @@ def rake_itu_task(
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
+@clio.with_copy_from_version()
 @clio.with_iso3(allow_all=True)
 @clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
@@ -189,6 +190,7 @@ def rake_itu_task(
 def rake_itu(
     resolution: str,
     version: str,
+    copy_from_version: str | None,
     iso3: str,
     time_point: str,
     output_dir: str,
@@ -196,6 +198,8 @@ def rake_itu(
 ) -> None:
     """Rake populations to the ITU masks."""
     pm_data = PopulationModelData(output_dir)
+    pm_data.maybe_copy_version(resolution, version, copy_from_version)
+
     available_iso3s = pm_data.list_itu_iso3s()
     iso3s = clio.convert_choice(iso3, available_iso3s)
 

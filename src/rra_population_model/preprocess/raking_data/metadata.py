@@ -30,6 +30,61 @@ WESTERN_SUB_SAHARAN_AFRICA = 199
 
 NO_REGION_ID = -1
 
+TO_DROP_PARENTS = [
+    # Drop UK UTLAs from these regions
+    4618,
+    4919,
+    4620,
+    4621,
+    4622,
+    4623,
+    4624,
+    4625,
+    4626,
+    # Drop the India urban/rural splits from these states
+    4841,
+    4842,
+    4843,
+    4844,
+    4846,
+    4849,
+    4850,
+    4851,
+    4852,
+    4853,
+    4854,
+    4855,
+    4856,
+    4857,
+    4859,
+    4860,
+    4861,
+    4862,
+    4863,
+    4864,
+    4865,
+    4867,
+    4868,
+    4869,
+    4870,
+    4871,
+    4872,
+    4873,
+    4874,
+    4875,
+    44538,
+    # Drop the Maori/non-Maori split from New Zealand
+    72,
+]
+
+TO_USE_LSAE_SHAPES = [
+    92,  # Spain, removes Canary Islands
+    71,  # Australia, removes Ashmore and Cartier Islands and Coral Sea Islands
+    # Canada and Greenland intersect in the GBD hierarchy, so swap both.
+    101,
+    349,
+]
+
 
 class SUPPLEMENT:
     WPP = "wpp"
@@ -202,8 +257,20 @@ def load_supplmental_metadata() -> pd.DataFrame:
                 "ATF",
                 SUPPLEMENT.ZERO_POPULATION,
             ),
-            (60921, "Antarctica", NO_REGION_ID, "ATA", SUPPLEMENT.ZERO_POPULATION),
-            (60923, "Bouvet Island", NO_REGION_ID, "BVT", SUPPLEMENT.ZERO_POPULATION),
+            (
+                60921,
+                "Antarctica",
+                SOUTHERN_LATIN_AMERICA,
+                "ATA",
+                SUPPLEMENT.ZERO_POPULATION,
+            ),
+            (
+                60923,
+                "Bouvet Island",
+                SOUTHERN_LATIN_AMERICA,
+                "BVT",
+                SUPPLEMENT.ZERO_POPULATION,
+            ),
             # ISO3 manually set
             (
                 60924,

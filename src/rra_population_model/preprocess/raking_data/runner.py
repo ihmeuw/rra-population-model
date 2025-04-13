@@ -16,7 +16,6 @@ from rra_population_model.preprocess.raking_data.metadata import (
 def raking_data_main(
     output_dir: str,
     out_version: str,
-    wpp_version: str = "2022",
 ) -> None:
     pm_data = PopulationModelData(output_dir)
 
@@ -29,10 +28,9 @@ def raking_data_main(
     shapes = utils.load_shapes(pm_data, gbd_version=gbd_version)
     supplemental_metadata = load_supplmental_metadata()
 
-    # WPP
-    wpp = utils.load_wpp_populations(pm_data, wpp_version=wpp_version)
-
     print("Building WPP data...")
+    wpp_version = "2024" if out_version == "gbd_2023" else "2022"
+    wpp = utils.load_wpp_populations(pm_data, wpp_version=wpp_version)
     # Add GBD location and region ids to the WPP data by mapping on iso3 codes
     wpp = utils.add_gbd_metadata_to_wpp(
         wpp=wpp,
@@ -81,13 +79,15 @@ def raking_data_main(
     pm_data.save_raking_data(
         population=raking_population,
         shapes=raking_shapes,
-        version=f"{out_version}_wpp_{wpp_version}",
+        version=f"{out_version}",
     )
 
 
 @click.command()
 @clio.with_output_directory(pmc.MODEL_ROOT)
-@clio.with_choice("out_version", allow_all=False, choices=["gbd_2021", "fhs_2021"])
+@clio.with_choice(
+    "out_version", allow_all=False, choices=["gbd_2023", "gbd_2021", "fhs_2021"]
+)
 def raking_data(
     output_dir: str,
     out_version: str,

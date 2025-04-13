@@ -12,29 +12,55 @@ from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
-TIME_POINT = "2023q4"
+RAKING_VERSION = "gbd_2023"
 
 
-def load_shape_population(pm_data: PopulationModelData, iso3: str) -> gpd.GeoDataFrame:
-    pop = pm_data.load_raking_population("fhs_2021_wpp_2022")
-    pop = pop[pop.year_id == int(TIME_POINT[:4])]
-    shapes = pm_data.load_raking_shapes("fhs_2021_wpp_2022")
+def load_admin_populations(
+    pm_data: PopulationModelData,
+    iso3: str,
+    time_point: str,
+) -> gpd.GeoDataFrame:
+    raking_pop = pm_data.load_raking_population(version=RAKING_VERSION)
+    all_pop = raking_pop.loc[raking_pop.most_detailed == 1].set_index(
+        ["year_id", "location_id"]
+    )["wpp_population"]
 
-    all_pop = shapes.merge(pop, on="location_id")
-    admin0_pop = all_pop[all_pop.ihme_loc_id == iso3]
+    # Interpolate the time point population
+    if "q" in time_point:
+        year, quarter = (int(s) for s in time_point.split("q"))
+        next_year = min(year + 1, 2100)
+        weight = (int(quarter) - 1) / 4
 
-    if admin0_pop.most_detailed.iloc[0] == 0:
-        location_id = admin0_pop.location_id.to_numpy()[0]
-        final_pop = all_pop[all_pop.parent_id == location_id]
+        prior_year_pop = all_pop.loc[year]
+        next_year_pop = all_pop.loc[next_year]
+
+        pop = (1 - weight) * prior_year_pop + weight * next_year_pop
     else:
-        final_pop = admin0_pop
-    return final_pop
+        year = int(time_point)
+        pop = all_pop.loc[year]
+
+    admin_0 = raking_pop[raking_pop.ihme_loc_id == iso3]
+    if admin_0.empty:
+        raking_locs = (
+            raking_pop[raking_pop.ihme_loc_id.str.startswith(iso3)]
+            .location_id.unique()
+            .tolist()
+        )
+        pop = pop.loc[raking_locs]
+    else:
+        pop = pop.loc[[admin_0.location_id.iloc[0]]]
+    pop = pop.reset_index()
+
+    admins = pm_data.load_raking_shapes(version=RAKING_VERSION)
+    pop = admins[["location_id", "geometry"]].merge(pop, on="location_id")
+    return pop
 
 
 def rake_itu_main(
     resolution: str,
     version: str,
     iso3: str,
+    time_point: str,
     output_dir: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
@@ -43,10 +69,9 @@ def rake_itu_main(
     modeling_frame = pm_data.load_modeling_frame(resolution)
 
     print("Building population shapefile")
-    pop = load_shape_population(pm_data, iso3)
+    pop = load_admin_populations(pm_data, iso3, time_point)
 
     itu_mask = pm_data.load_itu_mask(iso3)
-
     pop = pop.to_crs(itu_mask.crs)
 
     print("Building location id mask")
@@ -93,18 +118,22 @@ def rake_itu_main(
         .to_crs(itu_mask.crs)
         .buffer(0)
     )
-
     print("Loading predictions")
-    rasters = []
+    prediction: rt.RasterArray | None = None
     for i, block_key in enumerate(blocks.index):
         print(f"Loading block {i}/{len(blocks)}: {block_key}")
-        r = pm_data.load_raw_prediction(block_key, TIME_POINT, model_spec).resample_to(
+        r = pm_data.load_raw_prediction(block_key, time_point, model_spec).resample_to(
             itu_mask, "sum"
         )
-        rasters.append(r)
-    prediction = rt.merge(rasters)
+        if prediction is None:
+            prediction = r
+        else:
+            if np.nansum(r) == 0:
+                continue
+            prediction = rt.merge([prediction, r])
 
     print("Raking")
+    assert isinstance(prediction, rt.RasterArray)  # noqa: S101
     prediction_array = prediction.to_numpy()
     raking_factor = np.ones_like(location_mask)
     for location_id, location_pop in (
@@ -124,7 +153,7 @@ def rake_itu_main(
         no_data_value=np.nan,
     )
     pm_data.save_raked_prediction(
-        raked_pop, block_key=iso3, time_point=TIME_POINT, model_spec=model_spec
+        raked_pop, block_key=iso3, time_point=time_point, model_spec=model_spec
     )
 
 
@@ -132,17 +161,20 @@ def rake_itu_main(
 @clio.with_version()
 @clio.with_resolution()
 @clio.with_iso3()
+@clio.with_time_point(choices=None)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def rake_itu_task(
     resolution: str,
     version: str,
     iso3: str,
+    time_point: str,
     output_dir: str,
 ) -> None:
     rake_itu_main(
         resolution,
         version,
         iso3,
+        time_point,
         output_dir,
     )
 
@@ -150,20 +182,33 @@ def rake_itu_task(
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
+@clio.with_copy_from_version()
 @clio.with_iso3(allow_all=True)
+@clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def rake_itu(
     resolution: str,
     version: str,
+    copy_from_version: str | None,
     iso3: str,
+    time_point: str,
     output_dir: str,
     queue: str,
 ) -> None:
     """Rake populations to the ITU masks."""
     pm_data = PopulationModelData(output_dir)
+    pm_data.maybe_copy_version(resolution, version, copy_from_version)
+
     available_iso3s = pm_data.list_itu_iso3s()
     iso3s = clio.convert_choice(iso3, available_iso3s)
+
+    prediction_time_points = pm_data.list_raw_prediction_time_points(
+        resolution, version
+    )
+    time_points = clio.convert_choice(time_point, prediction_time_points)
+
+    print(f"Launching {len(iso3s) * len(time_points)} tasks")
 
     jobmon.run_parallel(
         runner="pmtask postprocess",
@@ -171,18 +216,19 @@ def rake_itu(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "50G",
+            "memory": "75G",
             "runtime": "60m",
             "project": "proj_rapidresponse",
         },
         node_args={
             "iso3": iso3s,
+            "time-point": time_points,
         },
         task_args={
             "resolution": resolution,
             "version": version,
             "output-dir": output_dir,
         },
-        max_attempts=1,
+        max_attempts=3,
         log_root=pm_data.log_dir("postprocess_rake_itu"),
     )

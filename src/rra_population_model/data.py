@@ -582,7 +582,9 @@ class PopulationModelData:
     def model_version_root(self, resolution: str, version: str) -> Path:
         return self.model_root(resolution) / version
 
-    def make_model_version_root(self, resolution: str, version: str) -> Path:
+    def make_model_version_root(
+        self, resolution: str, version: str, *, exist_ok: bool = False
+    ) -> Path:
         dirs = [
             self.model_version_root(resolution, version),
             self.raw_predictions_root(resolution, version),
@@ -591,16 +593,95 @@ class PopulationModelData:
             self.compiled_predictions_root(resolution, version),
         ]
         for path in dirs:
-            mkdir(path)
+            mkdir(path, exist_ok=exist_ok)
 
-        return path
+        return self.model_version_root(resolution, version)
+
+    def maybe_copy_version(
+        self,
+        resolution: str,
+        version: str,
+        copy_from_version: str | None,
+    ) -> None:
+        if copy_from_version is None:
+            # Nothing to do
+            return
+
+        version_root = self.model_version_root(resolution, version)
+        version_spec_path = self.model_specification_path(resolution, version)
+        version_ckpt_path = self.model_checkpoint_path(resolution, version)
+        version_preds_root = self.raw_predictions_root(resolution, version)
+
+        copy_from_root = self.model_version_root(resolution, copy_from_version)
+        copy_spec_path = self.model_specification_path(resolution, copy_from_version)
+        copy_ckpt_path = self.model_checkpoint_path(resolution, copy_from_version)
+        copy_preds_root = self.raw_predictions_root(resolution, copy_from_version)
+
+        #################
+        # Preconditions #
+        #################
+        # Basic checks
+        if copy_from_version >= version:
+            msg = "Cannot copy from a version that is the same or newer."
+            raise ValueError(msg)
+
+        if not copy_from_root.exists():
+            msg = f"Cannot copy from non-existent version {copy_from_version}"
+            raise ValueError(msg)
+
+        if copy_preds_root.is_symlink():
+            msg = f"Cannot copy from symlinked raw predictions root {copy_preds_root}"
+            raise ValueError(msg)
+
+        if version_root.exists() and not version_spec_path.exists():
+            msg = f"Version {version} exists but has no specification file. This is an invalid directory state."
+            raise ValueError(msg)
+
+        # Have we already copied this version?
+        if version_spec_path.exists():
+            model_matches = version_ckpt_path.exists() and version_ckpt_path.samefile(
+                copy_ckpt_path
+            )
+            predictions_match = (
+                version_preds_root.exists()
+                and version_preds_root.samefile(copy_preds_root)
+            )
+            if model_matches and predictions_match:
+                # We've already copied this version, we'll make this a no-op
+                return
+            else:
+                msg = f"Version {version} already exists but does not match copy-from version {copy_from_version}"
+                raise ValueError(msg)
+
+        # If we're here, everything should be safe for copying
+        # Generate the new version directory
+        self.make_model_version_root(resolution, version)
+
+        # Copy the model spec
+        copy_spec = yaml.safe_load(copy_spec_path.read_text())
+        copy_spec["model_version"] = version
+        copy_spec["output_root"] = str(version_root)
+        with version_spec_path.open("w") as f:
+            yaml.safe_dump(copy_spec, f)
+
+        # Symlink the model checkpoint.
+        version_ckpt_path.symlink_to(copy_ckpt_path.resolve())
+
+        # Symlink the raw predictions root
+        version_preds_root.rmdir()  # We've just made this as an empty directory
+        version_preds_root.symlink_to(copy_preds_root)
+
+    def model_specification_path(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "specification.yaml"
 
     def save_model_specification(
         self,
         model_spec: "ModelSpecification",
     ) -> None:
         self.make_model_version_root(model_spec.resolution, model_spec.model_version)
-        path = Path(model_spec.output_root) / "specification.yaml"
+        path = self.model_specification_path(
+            model_spec.resolution, model_spec.model_version
+        )
         touch(path)
         with path.open("w") as f:
             yaml.safe_dump(model_spec.model_dump(mode="json"), f)
@@ -610,15 +691,18 @@ class PopulationModelData:
     ) -> "ModelSpecification":
         from rra_population_model.model.modeling.datamodel import ModelSpecification
 
-        path = self.model_version_root(resolution, version) / "specification.yaml"
+        path = self.model_specification_path(resolution, version)
         with path.open() as f:
             spec = yaml.safe_load(f)
         return ModelSpecification.model_validate(spec)
 
+    def model_checkpoint_path(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "best_model.ckpt"
+
     def load_model(self, resolution: str, version: str) -> "PPSModel":
         from rra_population_model.model.modeling.model import PPSModel
 
-        ckpt_path = self.model_version_root(resolution, version) / "best_model.ckpt"
+        ckpt_path = self.model_checkpoint_path(resolution, version)
         return PPSModel.load_from_checkpoint(ckpt_path)
 
     def raw_predictions_root(self, resolution: str, version: str) -> Path:

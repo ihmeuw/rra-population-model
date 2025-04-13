@@ -14,12 +14,14 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
+RAKING_VERSION = "gbd_2023"
+
 
 def load_admin_populations(
     pm_data: PopulationModelData,
     time_point: str,
 ) -> gpd.GeoDataFrame:
-    raking_pop = pm_data.load_raking_population(version="fhs_2021_wpp_2022")
+    raking_pop = pm_data.load_raking_population(version=RAKING_VERSION)
     all_pop = raking_pop.loc[raking_pop.most_detailed == 1].set_index(
         ["year_id", "location_id"]
     )["population"]
@@ -38,7 +40,7 @@ def load_admin_populations(
         year = int(time_point)
         pop = all_pop.loc[year]
 
-    admins = pm_data.load_raking_shapes(version="fhs_2021_wpp_2022")
+    admins = pm_data.load_raking_shapes(version=RAKING_VERSION)
     pop = admins[["location_id", "geometry"]].merge(pop, on="location_id")
     return pop
 
@@ -181,6 +183,7 @@ def raking_factors_task(
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
+@clio.with_copy_from_version()
 @clio.with_time_point(choices=None, allow_all=True)
 @click.option("--extrapolate", is_flag=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
@@ -189,6 +192,7 @@ def raking_factors_task(
 def raking_factors(
     resolution: str,
     version: str,
+    copy_from_version: str | None,
     time_point: str,
     extrapolate: bool,
     output_dir: str,
@@ -196,6 +200,8 @@ def raking_factors(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
+    pm_data.maybe_copy_version(resolution, version, copy_from_version)
+
     prediction_time_points = pm_data.list_raw_prediction_time_points(
         resolution, version
     )

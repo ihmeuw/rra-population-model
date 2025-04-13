@@ -71,12 +71,15 @@ def inference_main(
         for block_key in block_keys
         if not pm_data.raw_prediction_path(block_key, time_point, model_spec).exists()
     ]
+    if not block_keys:
+        print("All blocks have been predicted.")
+        return
 
     datamodule = InferenceDataModule(
         model_spec.model_dump(),
         block_keys,
         time_point,
-        num_workers=4,
+        num_workers=0,
     )
     pred_writer = CustomWriter(
         pm_data, model.specification, time_point, write_interval="batch"
@@ -84,7 +87,7 @@ def inference_main(
     trainer = Trainer(
         callbacks=[pred_writer],
         enable_progress_bar=progress_bar,
-        devices=2,
+        devices=1,
     )
     trainer.predict(model, datamodule, return_predictions=False)
 

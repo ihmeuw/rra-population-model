@@ -93,6 +93,9 @@ def features(
     modeling_frame = pm_data.load_modeling_frame(resolution)
     block_keys = modeling_frame.block_key.unique().tolist()
 
+    njobs = len(block_keys) * len(time_point)
+    print(f"Submitting {njobs} jobs to process features")
+
     jobmon.run_parallel(
         runner="pmtask model_prep",
         task_name="features",

@@ -400,13 +400,18 @@ class InferenceDataset(Dataset[dict[str, Any]]):
 
         # Subset the features we want and convert the whole thing to
         # a tensor with the correct shape
-        feature_tensor = torch.stack(
-            [
-                torch.tensor(tile_data[feature].to_numpy(), dtype=torch.float32)
-                for feature in self._features
-            ],
-            dim=-1,
-        )
+        if self._features:
+            feature_tensor = torch.stack(
+                [
+                    torch.tensor(tile_data[feature].to_numpy(), dtype=torch.float32)
+                    for feature in self._features
+                ],
+                dim=-1,
+            )
+        else:
+            # Otherwise we just have an empty tensor
+            feature_tensor = torch.empty(0, dtype=torch.float32)
+
         built = tile_data["built"]
         built_tensor = torch.tensor(built.to_numpy(), dtype=torch.float32)
 

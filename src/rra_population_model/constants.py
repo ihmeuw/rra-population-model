@@ -2,7 +2,7 @@ import itertools
 import warnings
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal
 
 import pyproj
 from pydantic import BaseModel, model_validator
@@ -27,10 +27,9 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v4", "v6", "r2023a"]
+    version: Literal["v6", "r2023a"]
     time_points: list[str]
     measures: list[str]
-    denominators: list[str]
 
     @property
     def name(self) -> str:
@@ -45,39 +44,6 @@ class BuiltVersion(BaseModel):
             out.append(float(year) + (float(quarter) - 1) / 4)
         return out
 
-    @model_validator(mode="after")
-    def validate_version(self) -> Self:
-        version_map = {
-            "microsoft": ["v4", "v6"],
-            "ghsl": ["r2023a"],
-        }
-        allowed_version = version_map[self.provider]
-        if self.version not in allowed_version:
-            msg = f"Version {self.version} is not allowed for provider {self.provider}."
-            raise ValueError(msg)
-        return self
-
-    @model_validator(mode="after")
-    def validate_measures(self) -> Self:
-        allowed_measures = {
-            "ghsl": [
-                "density",
-                "volume",
-                "nonresidential_density",
-                "nonresidential_volume",
-            ],
-            "microsoft": ["density"],
-        }[self.provider]
-        extra = set(self.measures) - set(allowed_measures)
-        if extra:
-            msg = f"Measures {extra} are not allowed for provider {self.provider}."
-            raise ValueError(msg)
-        missing = set(allowed_measures) - set(self.measures)
-        if missing:
-            msg = f"Measures {missing} are required for provider {self.provider}."
-            raise ValueError(msg)
-        return self
-
 
 BUILT_VERSIONS = {
     "ghsl_r2023a": BuiltVersion(
@@ -85,24 +51,15 @@ BUILT_VERSIONS = {
         version="r2023a",
         time_points=[f"{y}q1" for y in range(1975, 2030, 5)],
         measures=[
+            "height",
+            "proportion_residential",
             "density",
-            "volume",
+            "residential_density",
             "nonresidential_density",
+            "volume",
+            "residential_volume",
             "nonresidential_volume",
         ],
-        denominators=[
-            "density",
-            "volume",
-            "residential_density",
-            "residential_volume",
-        ],
-    ),
-    "microsoft_v4": BuiltVersion(
-        provider="microsoft",
-        version="v4",
-        time_points=["2023q4"],
-        measures=["density"],
-        denominators=["density"],
     ),
     "microsoft_v6": BuiltVersion(
         provider="microsoft",
@@ -111,13 +68,17 @@ BUILT_VERSIONS = {
             f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
         ][1:],
         measures=["density"],
-        denominators=["density"],
     ),
 }
 
 DENOMINATORS = []
 for built_version in BUILT_VERSIONS.values():
-    for denominator in built_version.denominators:
+    for denominator in [
+        "density",
+        "volume",
+        "residential_density",
+        "residential_volume",
+    ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
 

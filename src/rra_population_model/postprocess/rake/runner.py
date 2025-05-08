@@ -121,13 +121,13 @@ def rake(
             "project": "proj_rapidresponse",
         },
         node_args={
+            "version": [f"2025_04_24.00{x}" for x in range(1, 9)],
             "block-key": block_keys,
             "time-point": time_points,
         },
         task_args={
             "resolution": resolution,
             "output-dir": output_dir,
-            "version": version,
         },
         max_attempts=3,
         log_root=pm_data.log_dir("postprocess_rake"),

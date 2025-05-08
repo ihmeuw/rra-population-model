@@ -1,5 +1,5 @@
-import itertools
-from enum import StrEnum
+import abc
+from pathlib import Path
 
 import numpy as np
 import rasterra as rt
@@ -13,157 +13,303 @@ from rra_population_model.model_prep.features import utils
 from rra_population_model.model_prep.features.metadata import FeatureMetadata
 
 
-def process_built_measure(
-    built_version: pmc.BuiltVersion,
-    measure: str,
-    feature_metadata: FeatureMetadata,
-    bd_data: BuildingDensityData,
-    pm_data: PopulationModelData,
-) -> None:
-    out_measure = f"{built_version.name}_{measure}"
-    strategy, fill_time_points = get_processing_strategy(
-        built_version=built_version,
-        time_point=feature_metadata.time_point,
-    )
-    if strategy == STRATEGIES.SKIP:
-        print(f"Skipping {measure} for {built_version.name}.")
-        return
-    elif strategy == STRATEGIES.PROCESS:
-        print(f"Processing {measure} for {built_version.name}.")
-        source_path = bd_data.tile_path(
-            provider=built_version.name,
-            measure=measure,
-            **feature_metadata.shared_kwargs,
+class ProcessingStrategy:
+    def __init__(
+        self,
+        built_version: pmc.BuiltVersion,
+        feature_metadata: FeatureMetadata,
+    ) -> None:
+        self.built_version = built_version
+        self.feature_metadata = feature_metadata
+
+    @abc.abstractmethod
+    def generate_measures(
+        self, bd_data: BuildingDensityData, pm_data: PopulationModelData
+    ) -> dict[str, Path]:
+        pass
+
+    @abc.abstractmethod
+    def generate_derived_measures(
+        self, bd_data: BuildingDensityData, pm_data: PopulationModelData
+    ) -> dict[str, Path]:
+        pass
+
+    @abc.abstractmethod
+    def generate_geospatial_averages(
+        self,
+        features: list[str],
+        feature_average_radii: list[int],
+        pm_data: PopulationModelData,
+    ) -> dict[str, Path]:
+        pass
+
+    @abc.abstractmethod
+    def link_features(
+        self,
+        feature_paths: dict[str, Path],
+        fill_time_points: list[str],
+        feature_metadata: FeatureMetadata,
+        pm_data: PopulationModelData,
+    ) -> None:
+        pass
+
+
+class SkipStrategy(ProcessingStrategy):
+    def generate_measures(
+        self,
+        bd_data: BuildingDensityData,  # noqa: ARG002
+        pm_data: PopulationModelData,  # noqa: ARG002
+    ) -> dict[str, Path]:
+        print(
+            f"Skipping {self.built_version.name} for {self.feature_metadata.time_point}."
         )
-        if not source_path.exists():
-            msg = f"Source path {source_path} does not exist."
-            raise FileNotFoundError(msg)
-        print(f"Linking {measure} for {built_version.name}.")
-        for time_point in [feature_metadata.time_point, *fill_time_points]:
+        return {}
+
+    def generate_derived_measures(
+        self,
+        bd_data: BuildingDensityData,  # noqa: ARG002
+        pm_data: PopulationModelData,  # noqa: ARG002
+    ) -> dict[str, Path]:
+        print(
+            f"Skipping {self.built_version.name} for {self.feature_metadata.time_point}."
+        )
+        return {}
+
+    def generate_geospatial_averages(
+        self,
+        features: list[str],  # noqa: ARG002
+        feature_average_radii: list[int],  # noqa: ARG002
+        pm_data: PopulationModelData,  # noqa: ARG002
+    ) -> dict[str, Path]:
+        print(
+            f"Skipping {self.built_version.name} for {self.feature_metadata.time_point}."
+        )
+        return {}
+
+    def link_features(
+        self,
+        feature_paths: dict[str, Path],  # noqa: ARG002
+        fill_time_points: list[str],
+        feature_metadata: FeatureMetadata,  # noqa: ARG002
+        pm_data: PopulationModelData,  # noqa: ARG002
+    ) -> None:
+        assert fill_time_points == []  # noqa: S101
+        print(
+            f"Skipping {self.built_version.name} for {self.feature_metadata.time_point}."
+        )
+
+
+class ProcessStrategy(ProcessingStrategy):
+    def generate_measures(
+        self, bd_data: BuildingDensityData, pm_data: PopulationModelData
+    ) -> dict[str, Path]:
+        out_paths = {}
+        for measure in self.built_version.measures:
+            out_measure = f"{self.built_version.name}_{measure}"
+            print(f"Processing {measure} for {self.built_version.name}.")
+            source_path = bd_data.tile_path(
+                provider=self.built_version.name,
+                measure=measure,
+                **self.feature_metadata.shared_kwargs,
+            )
+            if not source_path.exists():
+                msg = f"Source path {source_path} does not exist."
+                raise FileNotFoundError(msg)
+            print(f"Linking {measure} for {self.built_version.name}.")
             pm_data.link_feature(
                 source_path=source_path,
                 feature_name=out_measure,
-                resolution=feature_metadata.resolution,
-                block_key=feature_metadata.block_key,
-                time_point=time_point,
+                **self.feature_metadata.shared_kwargs,
             )
+            out_paths[out_measure] = source_path
+        return out_paths
 
-        print(f"Mosaicking {measure} for {built_version.name}.")
-        buffered_measure = mosaic_tile(
-            provider=built_version.name,
-            measure=measure,
-            time_point=feature_metadata.time_point,
-            feature_metadata=feature_metadata,
-            bd_data=bd_data,
-        )
+    def generate_derived_measures(
+        self,
+        bd_data: BuildingDensityData,  # noqa: ARG002
+        pm_data: PopulationModelData,
+    ) -> dict[str, Path]:
+        if self.built_version.name == "ghsl_r2023a":
+            # No derived measures for GHSL
+            return {}
+        elif self.built_version.name == "microsoft_v6":
+            return _generate_microsoft_derived_measures(pm_data, self.feature_metadata)
+        else:
+            msg = f"Unknown built version: {self.built_version.name}"
+            raise ValueError(msg)
 
-    elif strategy == STRATEGIES.INTERPOLATE:
-        tp_start, tp_end, w = get_time_points_and_weight(
-            built_version=built_version,
-            time_point=feature_metadata.time_point,
-        )
-        print(f"Interpolating {measure} for {built_version.name}.")
+    def generate_geospatial_averages(
+        self,
+        features: list[str],
+        feature_average_radii: list[int],
+        pm_data: PopulationModelData,
+    ) -> dict[str, Path]:
+        out_paths = {}
+        for feature in features:
+            for radius in feature_average_radii:
+                print(f"Processing {feature} with radius {radius}m.")
+                buffered_measure = mosaic_tile(
+                    measure=feature,
+                    feature_metadata=self.feature_metadata,
+                    pm_data=pm_data,
+                )
+                print(f"Processing {feature} with radius {radius}m.")
+                average_measure = (
+                    utils.make_spatial_average(
+                        tile=buffered_measure,
+                        radius=radius,
+                        kernel_type="gaussian",
+                    )
+                    .resample_to(self.feature_metadata.block_template, "average")
+                    .astype(np.float32)
+                )
+                pm_data.save_feature(
+                    average_measure,
+                    feature_name=f"{feature}_{radius}m",
+                    **self.feature_metadata.shared_kwargs,
+                )
+
+                out_paths[f"{feature}_{radius}m"] = pm_data.feature_path(
+                    feature_name=f"{feature}_{radius}m",
+                    **self.feature_metadata.shared_kwargs,
+                )
+        return out_paths
+
+    def link_features(
+        self,
+        feature_paths: dict[str, Path],
+        fill_time_points: list[str],
+        feature_metadata: FeatureMetadata,
+        pm_data: PopulationModelData,
+    ) -> None:
+        for feature, path in feature_paths.items():
+            for time_point in fill_time_points:
+                pm_data.link_feature(
+                    source_path=path,
+                    feature_name=feature,
+                    time_point=time_point,
+                    block_key=feature_metadata.block_key,
+                    resolution=feature_metadata.resolution,
+                )
+
+
+class InterpolateStrategy(ProcessStrategy):
+    def generate_measures(
+        self, bd_data: BuildingDensityData, pm_data: PopulationModelData
+    ) -> dict[str, Path]:
+        out_paths = {}
+        for measure in self.built_version.measures:
+            out_measure = f"{self.built_version.name}_{measure}"
+            tp_start, tp_end, w = get_time_points_and_weight(
+                built_version=self.built_version,
+                time_point=self.feature_metadata.time_point,
+            )
+            print(f"Interpolating {measure} for {self.built_version.name}.")
+            print(
+                f"Start: {tp_start}, End: {tp_end}, Weight: {w}, Time Point: {self.feature_metadata.time_point}"
+            )
+            print("Loading tiles")
+            tile_start = bd_data.load_tile(
+                resolution=self.feature_metadata.resolution,
+                provider=self.built_version.name,
+                block_key=self.feature_metadata.block_key,
+                time_point=tp_start,
+                measure=measure,
+            )
+            tile_end = bd_data.load_tile(
+                resolution=self.feature_metadata.resolution,
+                provider=self.built_version.name,
+                block_key=self.feature_metadata.block_key,
+                time_point=tp_end,
+                measure=measure,
+            )
+            print("Interpolating and saving")
+            built_measure = tile_start * w + tile_end * (1 - w)
+            built_measure = utils.suppress_noise(built_measure)
+            pm_data.save_feature(
+                built_measure,
+                feature_name=out_measure,
+                **self.feature_metadata.shared_kwargs,
+            )
+            out_paths[out_measure] = pm_data.feature_path(
+                feature_name=out_measure,
+                **self.feature_metadata.shared_kwargs,
+            )
+        return out_paths
+
+    def link_features(
+        self,
+        feature_paths: dict[str, Path],  # noqa: ARG002
+        fill_time_points: list[str],
+        feature_metadata: FeatureMetadata,  # noqa: ARG002
+        pm_data: PopulationModelData,  # noqa: ARG002
+    ) -> None:
+        assert fill_time_points == []  # noqa: S101
         print(
-            f"Start: {tp_start}, End: {tp_end}, Weight: {w}, Time Point: {feature_metadata.time_point}"
-        )
-        print("Loading tiles")
-        tile_start = bd_data.load_tile(
-            resolution=feature_metadata.resolution,
-            provider=built_version.name,
-            block_key=feature_metadata.block_key,
-            time_point=tp_start,
-            measure=measure,
-        )
-        tile_end = bd_data.load_tile(
-            resolution=feature_metadata.resolution,
-            provider=built_version.name,
-            block_key=feature_metadata.block_key,
-            time_point=tp_end,
-            measure=measure,
-        )
-        print("Interpolating and saving")
-        built_measure = tile_start * w + tile_end * (1 - w)
-        built_measure = utils.suppress_noise(built_measure)
-        pm_data.save_feature(
-            built_measure,
-            feature_name=out_measure,
-            **feature_metadata.shared_kwargs,
+            f"Skipping {self.built_version.name} for {self.feature_metadata.time_point}."
         )
 
-        print(f"Mosaicking {measure} for {built_version.name}.")
-        buffered_measure_start = mosaic_tile(
-            provider=built_version.name,
-            measure=measure,
-            time_point=tp_start,
-            feature_metadata=feature_metadata,
-            bd_data=bd_data,
-        )
-        buffered_measure_end = mosaic_tile(
-            provider=built_version.name,
-            measure=measure,
-            time_point=tp_end,
-            feature_metadata=feature_metadata,
-            bd_data=bd_data,
-        )
-        buffered_measure = buffered_measure_start * w + buffered_measure_end * (1 - w)
-        buffered_measure = utils.suppress_noise(buffered_measure)
 
-    for radius in pmc.FEATURE_AVERAGE_RADII:
-        print(f"Processing {measure} for {built_version.name} with radius {radius}m.")
-        average_measure = (
-            utils.make_spatial_average(
-                tile=buffered_measure,
-                radius=radius,
-                kernel_type="gaussian",
-            )
-            .resample_to(feature_metadata.block_template, "average")
-            .astype(np.float32)
-        )
-        pm_data.save_feature(
-            average_measure,
-            feature_name=f"{out_measure}_{radius}m",
-            **feature_metadata.shared_kwargs,
-        )
-
-        source_path = pm_data.feature_path(
-            feature_name=f"{out_measure}_{radius}m",
-            **feature_metadata.shared_kwargs,
-        )
-        for time_point in fill_time_points:
-            pm_data.link_feature(
-                source_path=source_path,
-                feature_name=f"{out_measure}_{radius}m",
-                resolution=feature_metadata.resolution,
-                block_key=feature_metadata.block_key,
-                time_point=time_point,
-            )
+HEIGHT_MIN = 2.4384  # 8ft
 
 
-def process_residential_density(
-    provider: str,
-    feature_metadata: FeatureMetadata,
+def _generate_microsoft_derived_measures(
     pm_data: PopulationModelData,
-) -> None:
-    suffixes = ["", *[f"_{r}m" for r in pmc.FEATURE_AVERAGE_RADII]]
-    measures = [
-        f"{m}{suffix}"
-        for m, suffix in itertools.product(["density", "volume"], suffixes)
-    ]
-    for measure in measures:
-        combined = pm_data.load_feature(
-            feature_name=f"{provider}_{measure}",
-            **feature_metadata.shared_kwargs,
+    feature_metadata: FeatureMetadata,
+) -> dict[str, Path]:
+    density = pm_data.load_feature(
+        feature_name="microsoft_v6_density",
+        **feature_metadata.shared_kwargs,
+    )
+    density_arr = density._ndarray  # noqa: SLF001
+    height_arr = pm_data.load_feature(  # noqa: SLF001
+        feature_name="ghsl_r2023a_height",
+        **feature_metadata.shared_kwargs,
+    )._ndarray
+    p_residential_arr = pm_data.load_feature(  # noqa: SLF001
+        feature_name="ghsl_r2023a_proportion_residential",
+        **feature_metadata.shared_kwargs,
+    )._ndarray
+
+    # Since we're crosswalking, ensure we have height wherever
+    # there is density, even if GHSL doesn't think there is density.
+    height_min = HEIGHT_MIN
+    if (height_arr > 0).any():
+        height_min = float(np.nanmin(height_arr[height_arr > 0]))
+    density_threshold = 0.01
+    density_is_positive = density_arr >= density_threshold
+    height_is_zero = height_arr == 0
+    height_arr[density_is_positive & height_is_zero] = height_min
+
+    out_ops = {
+        "density": lambda d, _, __: d,
+        "residential_density": lambda d, _, p: d * p,
+        "nonresidential_density": lambda d, _, p: d * (1 - p),
+        "volume": lambda d, h, _: h * d,
+        "residential_volume": lambda d, h, p: h * d * p,
+        "nonresidential_volume": lambda d, h, p: h * d * (1 - p),
+    }
+    for measure, op in out_ops.items():
+        out = rt.RasterArray(
+            data=op(density_arr, height_arr, p_residential_arr),  # type: ignore[no-untyped-call]
+            transform=density.transform,
+            crs=density.crs,
+            no_data_value=np.nan,
         )
-        nonresidential = pm_data.load_feature(
-            feature_name=f"{provider}_nonresidential_{measure}",
-            **feature_metadata.shared_kwargs,
-        )
-        residential = combined - nonresidential
         pm_data.save_feature(
-            residential,
-            feature_name=f"{provider}_residential_{measure}",
+            out,
+            feature_name=f"microsoft_v6_{measure}",
             **feature_metadata.shared_kwargs,
         )
+
+    out_paths = {
+        f"microsoft_v6_{m}": pm_data.feature_path(
+            feature_name=f"microsoft_v6_{m}",
+            **feature_metadata.shared_kwargs,
+        )
+        for m in out_ops
+    }
+    return out_paths
 
 
 def get_time_points_and_weight(
@@ -183,16 +329,10 @@ def get_time_points_and_weight(
     return tp_start, tp_end, w
 
 
-class STRATEGIES(StrEnum):
-    PROCESS = "process"
-    SKIP = "skip"
-    INTERPOLATE = "interpolate"
-
-
 def get_processing_strategy(
     built_version: pmc.BuiltVersion,
-    time_point: str,
-) -> tuple[STRATEGIES, list[str]]:
+    feature_metadata: FeatureMetadata,
+) -> tuple[ProcessingStrategy, list[str]]:
     """Determine the processing strategy for a given time point.
 
     This method is used to flexibly determine a processing strategy for a given time
@@ -209,6 +349,7 @@ def get_processing_strategy(
             In this case, we will interpolate the time point and process it.
 
     """
+    time_point = feature_metadata.time_point
     bv_tps = built_version.time_points
     bv_ftps = built_version.time_points_float
     first, last = bv_tps[0], bv_tps[-1]
@@ -216,10 +357,13 @@ def get_processing_strategy(
     year, quarter = time_point.split("q")
     time_point_float = float(year) + (float(quarter) - 1) / 4
 
+    strategy: ProcessingStrategy
     fill_time_points = []
     if time_point in bv_tps:
         # If the time point is in the built version, we process
-        strategy = STRATEGIES.PROCESS
+        strategy = ProcessStrategy(
+            built_version=built_version, feature_metadata=feature_metadata
+        )
         # If the time point is also terminal, we extrapolate as well
         # A time point can be first, last, or both (i.e. if the version has a
         # single time point)
@@ -235,31 +379,30 @@ def get_processing_strategy(
         # If the time point is before the first or after the last time point,
         # it will be extrapolated when we process the terminal time point,
         # so we don't need to do anything here.
-        strategy = STRATEGIES.SKIP
+        strategy = SkipStrategy(
+            built_version=built_version, feature_metadata=feature_metadata
+        )
     else:
         # The time point is between two time points, so we need to interpolate.
-        strategy = STRATEGIES.INTERPOLATE
+        strategy = InterpolateStrategy(
+            built_version=built_version, feature_metadata=feature_metadata
+        )
 
     return strategy, fill_time_points
 
 
 def mosaic_tile(
-    provider: str,
     measure: str,
-    time_point: str,
     feature_metadata: FeatureMetadata,
-    bd_data: BuildingDensityData,
+    pm_data: PopulationModelData,
 ) -> rt.RasterArray:
     tiles = []
-    for bk, bounds in feature_metadata.block_bounds.items():
+    for bounds in feature_metadata.block_bounds.values():
         try:
-            tile = bd_data.load_tile(
-                resolution=feature_metadata.resolution,
-                provider=provider,
-                block_key=bk,
-                time_point=time_point,
-                measure=measure,
-                bounds=bounds,
+            tile = pm_data.load_feature(
+                feature_name=measure,
+                **feature_metadata.shared_kwargs,
+                subset_bounds=bounds,
             )
             tile = tile.reproject(
                 dst_crs=feature_metadata.working_crs,

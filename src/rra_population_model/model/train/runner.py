@@ -36,7 +36,7 @@ def train_main(
         "ntl": ["nighttime_lights"],
         "log_ntl": ["log_nighttime_lights"],
     }[ntl_option]
-    bd_features = [f"{denominator}_{radius}m" for radius in pmc.FEATURE_AVERAGE_RADII]
+    bd_features: list[str] = []
     model_spec = ModelSpecification(
         model_version=version,
         model_root=str(pm_data.root),
@@ -130,9 +130,9 @@ def train(
         },
         task_resources={
             "queue": queue,
-            "cores": 8,
-            "memory": "120G",
-            "runtime": "60m",
+            "cores": 1,
+            "memory": "240G",
+            "runtime": "120m",
             "project": "proj_rapidresponse",
         },
         log_root=pm_data.log_dir("model_train"),

@@ -10,11 +10,16 @@ from rra_population_model.data import (
     PopulationModelData,
 )
 from rra_population_model.model_prep.features.built import (
-    process_built_measure,
-    process_residential_density,
+    get_processing_strategy,
 )
 from rra_population_model.model_prep.features.metadata import get_feature_metadata
 from rra_population_model.model_prep.features.ntl import process_ntl
+
+# GHSL first, as we need the height and residential mask for msft
+BUILT_VERSIONS = [
+    pmc.BUILT_VERSIONS["ghsl_r2023a"],
+    pmc.BUILT_VERSIONS["microsoft_v6"],
+]
 
 
 def features_main(
@@ -33,28 +38,66 @@ def features_main(
         pm_data, bd_data, resolution, block_key, time_point
     )
 
-    for built_version in pmc.BUILT_VERSIONS.values():
-        for measure in built_version.measures:
-            process_built_measure(
-                built_version=built_version,
-                measure=measure,
-                feature_metadata=feature_metadata,
-                bd_data=bd_data,
-                pm_data=pm_data,
-            )
-
-    print("Processing residential density")
-    process_residential_density(
-        provider="ghsl_r2023a",
-        feature_metadata=feature_metadata,
-        pm_data=pm_data,
-    )
+    for built_version in BUILT_VERSIONS:
+        print(f"Processing {built_version.name}")
+        strategy, fill_time_points = get_processing_strategy(
+            built_version, feature_metadata
+        )
+        measure_paths = strategy.generate_measures(bd_data, pm_data)
+        derived_measure_paths = strategy.generate_derived_measures(bd_data, pm_data)
+        strategy.link_features(
+            {**measure_paths, **derived_measure_paths},
+            fill_time_points,
+            feature_metadata,
+            pm_data,
+        )
 
     print("Processing NTL")
     process_ntl(
         feature_metadata=feature_metadata,
         pm_data=pm_data,
     )
+
+
+def geospatial_average_features_main(
+    block_key: str,
+    time_point: str,
+    resolution: str,
+    building_density_dir: str | Path,
+    model_root: str | Path,
+) -> None:
+    print(f"Processing features for block {block_key} at time {time_point}")
+    bd_data = BuildingDensityData(building_density_dir)
+    pm_data = PopulationModelData(model_root)
+
+    print("Loading all feature metadata")
+    feature_metadata = get_feature_metadata(
+        pm_data, bd_data, resolution, block_key, time_point
+    )
+    features_to_average = [
+        "density",
+        "volume",
+        "nonresidential_density",
+        "nonresidential_volume",
+        "residential_density",
+        "residential_volume",
+    ]
+    for built_version in BUILT_VERSIONS:
+        print(f"Processing {built_version.name}")
+        strategy, fill_time_points = get_processing_strategy(
+            built_version, feature_metadata
+        )
+        feature_paths = strategy.generate_geospatial_averages(
+            [f"{built_version.name}_{feature}" for feature in features_to_average],
+            pmc.FEATURE_AVERAGE_RADII,
+            pm_data,
+        )
+        strategy.link_features(
+            feature_paths,
+            fill_time_points,
+            feature_metadata,
+            pm_data,
+        )
 
 
 @click.command()
@@ -72,6 +115,24 @@ def features_task(
 ) -> None:
     """Build predictors for a given tile and time point."""
     features_main(block_key, time_point, resolution, building_density_dir, output_dir)
+
+
+@click.command()
+@clio.with_block_key()
+@clio.with_time_point()
+@clio.with_resolution()
+@clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
+@clio.with_output_directory(pmc.MODEL_ROOT)
+def geospatial_average_features_task(
+    block_key: str,
+    time_point: str,
+    resolution: str,
+    building_density_dir: str,
+    output_dir: str,
+) -> None:
+    geospatial_average_features_main(
+        block_key, time_point, resolution, building_density_dir, output_dir
+    )
 
 
 @click.command()

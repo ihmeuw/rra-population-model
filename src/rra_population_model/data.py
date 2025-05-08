@@ -259,6 +259,7 @@ class PopulationModelData:
 
     _modeling_frame_filename = "modeling_frame.parquet"
     _modeling_frame_info_filename = "modeling_frame_info.yaml"
+    _validation_frame_filename = "validation_frame.parquet"
 
     def __init__(self, root: str | Path = pmc.MODEL_ROOT):
         self._root = Path(root)
@@ -319,11 +320,20 @@ class PopulationModelData:
         gdf.to_parquet(path, write_covering_bbox=True)
 
     def load_census_data(
-        self, iso3: str, year: str, bounds: Bounds | None = None
+        self,
+        iso3: str,
+        year: str,
+        bounds: Bounds | None = None,
+        admin_level: int | None = None,
     ) -> gpd.GeoDataFrame:
         bbox = bounds_to_bbox(bounds)
         path = self.census_path(iso3, year)
-        return gpd.read_parquet(path, bbox=bbox)
+        if admin_level is not None:
+            filters = [("admin_level", "==", admin_level)]
+        else:
+            filters = None
+
+        return gpd.read_parquet(path, bbox=bbox, filters=filters)
 
     @property
     def itu_masks(self) -> Path:
@@ -398,6 +408,9 @@ class PopulationModelData:
     def modeling_frame_info_path(self, resolution: str) -> Path:
         return self.resolution_root(resolution) / self._modeling_frame_info_filename
 
+    def validation_frame_path(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / self._validation_frame_filename
+
     def save_modeling_frame(
         self,
         resolution: str,
@@ -423,6 +436,19 @@ class PopulationModelData:
         with path.open() as f:
             info = yaml.safe_load(f)
         return ModelFrameInfo(**info)
+
+    def save_validation_frame(
+        self,
+        resolution: str,
+        validation_frame: pd.DataFrame,
+    ) -> None:
+        path = self.validation_frame_path(resolution)
+        touch(path, clobber=True)
+        validation_frame.to_parquet(path)
+
+    def load_validation_frame(self, resolution: str) -> pd.DataFrame:
+        path = self.validation_frame_path(resolution)
+        return pd.read_parquet(path)
 
     def features_root(self, resolution: str) -> Path:
         return self.resolution_root(resolution) / "features"
@@ -888,6 +914,67 @@ class PopulationModelData:
         path = self.compiled_prediction_path(group_key, time_point, model_spec)
         return rt.load_raster(path)
 
+    def validation_root(self, resolution: str, version: str) -> Path:
+        return self.model_version_root(resolution, version) / "validation"
+
+    def raw_validation_path(
+        self, resolution: str, version: str, block_key: str, time_point: str
+    ) -> Path:
+        return (
+            self.validation_root(resolution, version)
+            / time_point
+            / f"{block_key}.parquet"
+        )
+
+    def save_raw_validation_data(
+        self,
+        validation_data: pd.DataFrame,
+        resolution: str,
+        version: str,
+        block_key: str,
+        time_point: str,
+    ) -> None:
+        path = self.raw_validation_path(resolution, version, block_key, time_point)
+        mkdir(path.parent, exist_ok=True, parents=True)
+        save_parquet(validation_data, path)
+
+    def load_raw_validation_data(
+        self,
+        resolution: str,
+        version: str,
+        block_key: str,
+        time_point: str,
+    ) -> pd.DataFrame:
+        path = self.raw_validation_path(resolution, version, block_key, time_point)
+        return pd.read_parquet(path)
+
+    def compiled_validation_path(
+        self, resolution: str, version: str, time_point: str
+    ) -> Path:
+        return (
+            self.validation_root(resolution, version) / time_point / "compiled.parquet"
+        )
+
+    def save_compiled_validation_data(
+        self,
+        compiled_data: pd.DataFrame,
+        resolution: str,
+        version: str,
+        time_point: str,
+    ) -> None:
+        path = self.compiled_validation_path(resolution, version, time_point)
+        mkdir(path.parent, exist_ok=True, parents=True)
+        save_parquet(compiled_data, path)
+
+    def load_compiled_validation_data(
+        self,
+        resolution: str,
+        version: str,
+        time_point: str,
+    ) -> pd.DataFrame:
+        path = self.compiled_validation_path(resolution, version, time_point)
+        return pd.read_parquet(path)
+
     @property
     def results(self) -> Path:
         return Path(self.root, "results")
@@ -925,6 +1012,15 @@ def bounds_to_bbox(bounds: Bounds | None) -> BBox | None:
         msg = f"Invalid bounds type: {type(bounds)}"
         raise TypeError(msg)
     return bbox  # type: ignore[no-any-return]
+
+
+def save_parquet(
+    data: pd.DataFrame | gpd.GeoDataFrame,
+    output_path: str | Path,
+) -> None:
+    """Save a pandas DataFrame or GeoDataFrame to a parquet file."""
+    touch(output_path, clobber=True)
+    data.to_parquet(output_path)
 
 
 def save_raster(

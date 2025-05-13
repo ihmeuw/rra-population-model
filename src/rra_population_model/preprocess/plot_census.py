@@ -12,7 +12,7 @@ import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from PyPDF2 import PdfMerger
+from PyPDF2 import PdfMerger  # type: ignore[import-not-found]
 from rra_tools import jobmon
 from rra_tools.plotting import strip_axes, write_or_show
 from rra_tools.shell_tools import touch
@@ -499,7 +499,7 @@ def plot_census_summary_task(
     plot_census_summary_main(iso3, year, output_dir)
 
 
-class PdfFileMerger(PdfMerger):
+class PdfFileMerger(PdfMerger):  # type: ignore[misc]
     """Super annoying that the real class isn't a context manager."""
 
     def __enter__(self) -> "PdfFileMerger":

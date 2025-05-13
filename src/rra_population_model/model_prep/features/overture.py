@@ -1,44 +1,34 @@
-from rra_population_model import constants as pmc
-from rra_population_model.data import (
-    BuildingDensityData,
-    PopulationModelData,
-)
-from rra_population_model.model_prep.features.metadata import get_feature_metadata
-
-import pandas as pd
-import geopandas as gpd
-from geopandas import GeoDataFrame
-import numpy as np
 from pathlib import Path
+from typing import Any, cast
 
+import geopandas as gpd
+import numpy as np
 import rasterio
-from rasterio.crs import CRS
 import rasterio.mask
 import rasterio.plot
-
-from scipy.ndimage import distance_transform_edt
 from affine import Affine
-import matplotlib.pyplot as plt
-
-from shapely.geometry import box, Point, LineString
+from geopandas import GeoDataFrame
+from numpy.typing import NDArray
+from rasterio.crs import CRS
+from scipy.ndimage import distance_transform_edt
+from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
+from rra_population_model.model_prep.features.metadata import get_feature_metadata
 
-from pathlib import Path
-from typing import Tuple, Union, Any
 
 def read_and_clip_vector(
-    vector_file_path: Union[str, Path],
-    bbox: BaseGeometry
+    vector_file_path: str | Path, bbox: BaseGeometry
 ) -> gpd.GeoDataFrame:
-
     # Read the vector data
     vector_gdf = gpd.read_parquet(vector_file_path, bbox=bbox)
 
     return vector_gdf
 
 
-def expand_block_bounding_box(modeling_frame: gpd.GeoDataFrame, block_key: str, expansion_factor: float = 1.0) -> gpd.GeoSeries:
+def expand_block_bounding_box(
+    modeling_frame: gpd.GeoDataFrame, block_key: str, expansion_factor: float = 1.0
+) -> gpd.GeoSeries:
     # Subset the frame to the block
     block_tiles = modeling_frame[modeling_frame["block_key"] == block_key]
 
@@ -60,45 +50,54 @@ def expand_block_bounding_box(modeling_frame: gpd.GeoDataFrame, block_key: str, 
 
 
 # Get Meta data from TIF file
-def get_metadata(tif_file_path: Path) -> Tuple[dict, Tuple[int, int], Affine, CRS]:
-    
+def get_metadata(
+    tif_file_path: Path,
+) -> tuple[dict[str, Any], tuple[int, int], Affine, CRS]:
     with rasterio.open(tif_file_path) as src:
         out_meta = src.meta
         shape = src.shape
-    
+
     # Transform Data
-    transform = out_meta['transform']
+    transform = out_meta["transform"]
     # Out metadata is exactly the same as our in metadata.
-    target_crs = out_meta['crs']
-    
+    target_crs = out_meta["crs"]
+
     return out_meta, shape, transform, target_crs
 
 
-# Generate expanded shape and new transform 
-def expand_shape_and_transform(original_shape: Tuple[int, int], original_transform: Affine) -> Tuple[Tuple[int, int], Affine]:
-
+# Generate expanded shape and new transform
+def expand_shape_and_transform(
+    original_shape: tuple[int, int], original_transform: Affine
+) -> tuple[tuple[int, int], Affine]:
     # New shape
-    new_shape = (original_shape[0]*3, original_shape[1]*3)
+    new_shape = (original_shape[0] * 3, original_shape[1] * 3)
 
     # New transform
     # Calculate the adjustment considering the resolution
     height = original_shape[0]
     width = original_shape[1]
-    
+
     resolution = original_transform.a
     adjustment_x = resolution * width  # Width adjustment (to the left)
     adjustment_y = resolution * height  # Height adjustment (up)
 
     # Update the transform by adding adjustments
-    new_transform = Affine(original_transform.a, original_transform.b, original_transform.c - adjustment_x,
-                        original_transform.d, original_transform.e, original_transform.f + adjustment_y)
+    new_transform = Affine(
+        original_transform.a,
+        original_transform.b,
+        original_transform.c - adjustment_x,
+        original_transform.d,
+        original_transform.e,
+        original_transform.f + adjustment_y,
+    )
 
-    return new_shape, new_transform 
+    return new_shape, new_transform
 
 
 # Rasterize geometeries found in a GDF onto an empty array based on an existing transform
-def rasterize(gdf: GeoDataFrame, out_shape: Tuple[int, int], transform: Affine) -> np.ndarray:
-
+def rasterize(
+    gdf: GeoDataFrame, out_shape: tuple[int, int], transform: Affine
+) -> NDArray[np.int_]:
     # Rasterize the GeoDataFrame
     rasterized = rasterio.features.rasterize(
         [(geom, 1) for geom in gdf.geometry],
@@ -106,21 +105,23 @@ def rasterize(gdf: GeoDataFrame, out_shape: Tuple[int, int], transform: Affine) 
         transform=transform,
         fill=0,
         all_touched=True,
-        dtype=rasterio.uint8
+        dtype=rasterio.uint8,
     )
 
     # Switch 1s and 0s
     rasterized = np.logical_not(rasterized).astype(int)
-    return rasterized
+    return cast(NDArray[np.int_], rasterized)
+
 
 # Subset expanded distance array to original size
-def subset_array(original_shape: Tuple[int, int], computed_array: np.ndarray) -> np.ndarray:
-
+def subset_array(
+    original_shape: tuple[int, int], computed_array: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     # Create rows and columns
     start_row = original_shape[0]
-    end_row = original_shape[0]*2
+    end_row = original_shape[0] * 2
     start_col = original_shape[1]
-    end_col = original_shape[1]*2
+    end_col = original_shape[1] * 2
 
     # Subset original array from expanded distance array
     original_out = computed_array[start_row:end_row, start_col:end_col]
@@ -128,26 +129,31 @@ def subset_array(original_shape: Tuple[int, int], computed_array: np.ndarray) ->
     return original_out
 
 
-
 def generate_distance_raster(
-    pm_data,
-    bd_data,
+    pm_data: Any,
+    bd_data: Any,
     resolution: str,
     block_key: str,
     time_point: str,
     overture_class: str,
     overture_type: str,
-    output_dir: Path
+    output_dir: Path,
 ) -> None:
-    overture_root = Path("/mnt/team/rapidresponse/pub/population/data/02-processed-data/covariates/overture/") # UPDATE NEEDED
+    overture_root = Path(
+        "/mnt/team/rapidresponse/pub/population/data/02-processed-data/covariates/overture/"
+    )  # UPDATE NEEDED
 
     # Step 1: Get feature metadata and modeling frame
-    feature_metadata = get_feature_metadata(pm_data, bd_data, resolution, block_key, time_point)
+    feature_metadata = get_feature_metadata(
+        pm_data, bd_data, resolution, block_key, time_point
+    )
     modeling_frame = feature_metadata[0]
     modeling_frame = modeling_frame.to_crs("EPSG:4326")  # Reproject to WGS84
 
     # Step 2: Get expanded bounding box
-    expanded_bbox = expand_block_bounding_box(modeling_frame, block_key, expansion_factor=1.0).bounds
+    expanded_bbox = expand_block_bounding_box(
+        modeling_frame, block_key, expansion_factor=1.0
+    ).bounds
 
     # Step 3: Read in vector file and reproject
     vector_file_path = overture_root / overture_type / f"{overture_class}.parquet"
@@ -176,7 +182,7 @@ def generate_distance_raster(
     original_out = subset_array(shape, distance_array)
 
     # Step 10: Write distance raster to disk
-    original_out = original_out.astype(out_meta['dtype'])
+    original_out = original_out.astype(out_meta["dtype"])
     out_path = Path(output_dir) / f"{block_key}_distance.tif"
 
     with rasterio.open(out_path, "w", **out_meta) as dest:

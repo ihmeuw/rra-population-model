@@ -328,12 +328,11 @@ class PopulationModelData:
     ) -> gpd.GeoDataFrame:
         bbox = bounds_to_bbox(bounds)
         path = self.census_path(iso3, year)
+        kwargs = {'bbox':bbox}
         if admin_level is not None:
-            filters = [("admin_level", "==", admin_level)]
-        else:
-            filters = None
+            kwargs['filters'] = [("admin_level", "==", admin_level)]
 
-        return gpd.read_parquet(path, bbox=bbox, filters=filters)
+        return gpd.read_parquet(path, **kwargs)
 
     @property
     def itu_masks(self) -> Path:
@@ -493,7 +492,7 @@ class PopulationModelData:
         time_point: str,
     ) -> None:
         out_path = self.feature_path(resolution, block_key, feature_name, time_point)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        mkdir(out_path.parent, parents=True, exist_ok=True)
         touch(out_path, clobber=True)
         save_raster(feature_raster, out_path)
 

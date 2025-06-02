@@ -4,3 +4,5 @@ geopandas
 xarray
 rra_tools
 pyarrow
+openpyxl
+netcdf4

@@ -20,7 +20,9 @@ UPSAMPLE_SPECS = {
     "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
     "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
     "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
+    "world_cylindrical_10000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
     "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
+    "world_cylindrical_10000": (pmc.CRSES["world_cylindrical"], 10000, "sum"),
     "world_cylindrical_5000": (pmc.CRSES["world_cylindrical"], 5000, "sum"),
     "world_cylindrical_1000": (pmc.CRSES["world_cylindrical"], 1000, "sum"),
     "wgs84_0p1": (pmc.CRSES["wgs84"], 0.1, "sum"),
@@ -160,8 +162,9 @@ def upsample(
     compiled_time_points = pm_data.list_compiled_prediction_time_points(
         resolution, version
     )
-    compiled_time_points = [f"{y}q1" for y in range(1950, 1976)]
+    # compiled_time_points = [f"{y}q1" for y in range(1950, 1976)]
     time_points = clio.convert_choice(time_point, compiled_time_points)
+    time_points = [time_point for time_point in time_points if time_point.startswith('202')]
 
     print("Upsampling")
 

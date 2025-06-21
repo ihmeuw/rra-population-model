@@ -121,11 +121,12 @@ def rake(
             "project": "proj_rapidresponse",
         },
         node_args={
-            "version": [f"2025_04_24.00{x}" for x in range(1, 9)],
+            "version": [version],  # [f"2025_06_21.00{x}" for x in range(1, 5)],
             "block-key": block_keys,
             "time-point": time_points,
         },
         task_args={
+            # "version": version,
             "resolution": resolution,
             "output-dir": output_dir,
         },

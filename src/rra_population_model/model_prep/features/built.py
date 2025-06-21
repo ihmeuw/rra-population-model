@@ -132,7 +132,7 @@ class ProcessStrategy(ProcessingStrategy):
         if self.built_version.name == "ghsl_r2023a":
             # No derived measures for GHSL
             return {}
-        elif self.built_version.name == "microsoft_v6":
+        elif self.built_version.name == "microsoft_v7":
             return _generate_microsoft_derived_measures(pm_data, self.feature_metadata)
         else:
             msg = f"Unknown built version: {self.built_version.name}"
@@ -258,12 +258,12 @@ def _generate_microsoft_derived_measures(
     feature_metadata: FeatureMetadata,
 ) -> dict[str, Path]:
     density = pm_data.load_feature(
-        feature_name="microsoft_v6_density",
+        feature_name="microsoft_v7_density",
         **feature_metadata.shared_kwargs,
     )
     density_arr = density._ndarray  # noqa: SLF001
     height_arr = pm_data.load_feature(  # noqa: SLF001
-        feature_name="ghsl_r2023a_height",
+        feature_name="microsoft_v7_height",
         **feature_metadata.shared_kwargs,
     )._ndarray
     p_residential_arr = pm_data.load_feature(  # noqa: SLF001
@@ -298,13 +298,13 @@ def _generate_microsoft_derived_measures(
         )
         pm_data.save_feature(
             out,
-            feature_name=f"microsoft_v6_{measure}",
+            feature_name=f"microsoft_v7_{measure}",
             **feature_metadata.shared_kwargs,
         )
 
     out_paths = {
-        f"microsoft_v6_{m}": pm_data.feature_path(
-            feature_name=f"microsoft_v6_{m}",
+        f"microsoft_v7_{m}": pm_data.feature_path(
+            feature_name=f"microsoft_v7_{m}",
             **feature_metadata.shared_kwargs,
         )
         for m in out_ops

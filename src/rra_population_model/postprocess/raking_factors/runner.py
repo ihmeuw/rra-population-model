@@ -224,10 +224,11 @@ def raking_factors(
             "project": "proj_rapidresponse",
         },
         node_args={
+            "version": [version],  # [f"2025_06_21.00{x}" for x in range(1, 5)],
             "time-point": time_points,
         },
         task_args={
-            "version": version,
+            # "version": version,
             "resolution": resolution,
             "num-cores": num_cores,
             "output-dir": output_dir,

@@ -64,7 +64,7 @@ def pixel_metrics_main(
     )
     block_poly = block_frame.geometry.iloc[0]
 
-    print("Loading and raked population predictions")
+    print("Loading raked population predictions")
     model_spec = pm_data.load_model_specification(resolution, version)
     pop_raster = pm_data.load_raked_prediction(block_key, time_point, model_spec)
     pop_arr = pop_raster._ndarray  # noqa: SLF001
@@ -156,7 +156,7 @@ def metrics(
 ) -> None:
     pm_data = PopulationModelData(output_dir)
 
-    time_points = pm_data.list_raking_factor_time_points(resolution, version)
+    time_points = pm_data.list_raked_prediction_time_points(resolution, version)
     if time_point not in time_points:
         msg = (
             f"Time point {time_point} not found in {resolution} {version}.\n"
@@ -179,7 +179,7 @@ def metrics(
         },
         node_args={
             "block-key": block_keys,
-            "version": [f"2025_04_24.00{i}" for i in range(1, 9)],
+            "version": [f"2025_06_21.00{i}" for i in range(1, 5)],
         },
         task_args={
             "resolution": resolution,

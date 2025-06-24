@@ -136,11 +136,11 @@ def inference(
         runner="pmtask model",
         task_name="inference",
         node_args={
-            "version": [version],  # [f"2025_06_21.00{x}" for x in range(1, 5)],
+            # "version": [f"2025_06_21.00{x}" for x in range(1, 5)],
             "time-point": time_points,
         },
         task_args={
-            # "version": version,
+            "version": version,
             "resolution": resolution,
             "output-dir": output_dir,
         },

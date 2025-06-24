@@ -27,7 +27,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v6", "r2023a"]
+    version: Literal["v6", "v7", "r2023a"]
     time_points: list[str]
     measures: list[str]
 
@@ -69,6 +69,20 @@ BUILT_VERSIONS = {
         ][1:],
         measures=["density"],
     ),
+    "microsoft_v7": BuiltVersion(
+        provider="microsoft",
+        version="v7",
+        # time_points=[
+        #     f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+        # ][1:-2],
+        time_points=[
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
+        ][1:],
+        measures=[
+            "density",
+            "height",
+        ],
+    ),
 }
 
 DENOMINATORS = []
@@ -93,7 +107,7 @@ FEATURE_AVERAGE_RADII = [
 
 ALL_TIME_POINTS = sorted(
     set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
-    | {f"{y}q1" for y in range(1975, 2025)}
+    | {f"{y}q1" for y in range(1975, 2026)}
 )
 
 

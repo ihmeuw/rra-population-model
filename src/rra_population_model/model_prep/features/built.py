@@ -132,8 +132,8 @@ class ProcessStrategy(ProcessingStrategy):
         if self.built_version.name == "ghsl_r2023a":
             # No derived measures for GHSL
             return {}
-        elif self.built_version.name == "microsoft_v6":
-            return _generate_microsoft_derived_measures(pm_data, self.feature_metadata)
+        elif self.built_version.name in ["microsoft_v6", "microsoft_v7"]:
+            return _generate_microsoft_derived_measures(pm_data, self.feature_metadata, self.built_version.name)
         else:
             msg = f"Unknown built version: {self.built_version.name}"
             raise ValueError(msg)
@@ -256,18 +256,31 @@ HEIGHT_MIN = 2.4384  # 8ft
 def _generate_microsoft_derived_measures(
     pm_data: PopulationModelData,
     feature_metadata: FeatureMetadata,
+    built_version_name: str,
 ) -> dict[str, Path]:
+    feature_dict = {
+        "microsoft_v6": {
+            "density": "microsoft_v6_density",
+            "height": "ghsl_r2023a_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v7": {
+            "density": "microsoft_v7_density",
+            "height": "microsoft_v7_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+    }[built_version_name]
     density = pm_data.load_feature(
-        feature_name="microsoft_v6_density",
+        feature_name=feature_dict["density"],
         **feature_metadata.shared_kwargs,
     )
     density_arr = density._ndarray  # noqa: SLF001
     height_arr = pm_data.load_feature(  # noqa: SLF001
-        feature_name="ghsl_r2023a_height",
+        feature_name=feature_dict["height"],
         **feature_metadata.shared_kwargs,
     )._ndarray
     p_residential_arr = pm_data.load_feature(  # noqa: SLF001
-        feature_name="ghsl_r2023a_proportion_residential",
+        feature_name=feature_dict["p_residential"],
         **feature_metadata.shared_kwargs,
     )._ndarray
 
@@ -298,13 +311,13 @@ def _generate_microsoft_derived_measures(
         )
         pm_data.save_feature(
             out,
-            feature_name=f"microsoft_v6_{measure}",
+            feature_name=f"{built_version_name}_{measure}",
             **feature_metadata.shared_kwargs,
         )
 
     out_paths = {
-        f"microsoft_v6_{m}": pm_data.feature_path(
-            feature_name=f"microsoft_v6_{m}",
+        f"{built_version_name}_{m}": pm_data.feature_path(
+            feature_name=f"{built_version_name}_{m}",
             **feature_metadata.shared_kwargs,
         )
         for m in out_ops

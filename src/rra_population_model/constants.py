@@ -95,6 +95,10 @@ for built_version in BUILT_VERSIONS.values():
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
+DATA_PURPOSES = [
+    'training',
+    'inference',
+]
 
 FEATURE_AVERAGE_RADII = [
     100,

@@ -144,6 +144,20 @@ def with_tile_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     )
 
 
+def with_purpose[**P, T](
+    choices: Collection[str] = pmc.DATA_PURPOSES,
+    *,
+    allow_all: bool = False,
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    return with_choice(
+        "purpose",
+        allow_all=allow_all,
+        choices=choices,
+        help="Data purpose to run.",
+        convert=allow_all,
+    )
+
+
 __all__ = [
     "RUN_ALL",
     "convert_choice",
@@ -158,6 +172,7 @@ __all__ = [
     "with_output_directory",
     "with_overwrite",
     "with_progress_bar",
+    "with_purpose",
     "with_queue",
     "with_resolution",
     "with_tile_key",

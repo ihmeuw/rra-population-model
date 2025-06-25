@@ -1,5 +1,6 @@
 from collections import defaultdict
 from typing import Any
+import itertools
 
 import geopandas as gpd
 import numpy as np
@@ -8,6 +9,7 @@ import pandas as pd
 import rasterra as rt
 import tqdm
 
+from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.model_prep.training_data.metadata import (
     TileMetadata,
@@ -24,7 +26,7 @@ def get_intersecting_admins(
     year = time_point.split("q")[0]
 
     admin_data = []
-    for iso in iso3_list.split(","):
+    for iso in iso3_list:
         a = pm_data.load_census_data(iso, year, tile_meta.polygon)
         # Need to intersect again with the tile poly because we load based on the
         # intersection with the bounding box.
@@ -45,27 +47,34 @@ def get_intersecting_admins(
     return admins.loc[:, ["admin_id", "admin_population", "admin_area", "geometry"]]
 
 
-def get_training_locations_and_years(
+def get_data_locations_and_years(
     pm_data: PopulationModelData,
+    purpose: str,
 ) -> list[tuple[str, str, str]]:
     """Get the locations and years for which we have training data."""
-    available_census_years = pm_data.list_census_data()  # noqa: F841
-    return [
-        ("MEX", "2020", "1"),
-        ("USA", "2020", "1"),
-    ]
+    if purpose == 'training':
+        available_census_years = [
+            ("MEX", "2020", "1"),
+            ("USA", "2020", "1"),
+        ]
+    elif purpose == 'inference':
+        available_census_years = pm_data.list_census_data()
+        model_years = list(set([tp.split('q')[0] for tp in pmc.BUILT_VERSIONS["microsoft_v7"].time_points]))
+        available_census_years = [i for i in available_census_years if i[1] in model_years]
+    return available_census_years
 
 
 def build_arg_list(
     resolution: str,
     pm_data: PopulationModelData,
+    purpose: str,
     buffer_size: int | float = 5000,
 ) -> list[tuple[str, str, str]]:
     modeling_frame = pm_data.load_modeling_frame(resolution)
-    training_census_years = get_training_locations_and_years(pm_data)
+    data_years = get_data_locations_and_years(pm_data, purpose)
 
-    tile_keys_and_times = defaultdict(list)
-    for iso3, year, quarter in training_census_years:
+    tile_keys_and_times = []
+    for iso3, year, quarter in data_years:
         print(f"Processing {iso3} {year}q{quarter}")
         shape = pm_data.load_census_data(iso3, year)
         a1 = (
@@ -76,11 +85,75 @@ def build_arg_list(
         )
         a1_intersection = modeling_frame[modeling_frame.intersects(a1)]
         for tile_key in a1_intersection.tile_key.unique():
-            tile_keys_and_times[(tile_key, f"{year}q{quarter}")].append(iso3)
+            tile_keys_and_times.append(
+                pd.DataFrame(
+                    {"iso3_time_point": f"{year}q{quarter}", "iso3": iso3},
+                    index=pd.Index([tile_key], name='tile_key'),
+                )
+            )
+    tile_keys_and_times = pd.concat(tile_keys_and_times)
+    if purpose == 'training':
+        tile_keys_and_times['time_point'] = tile_keys_and_times['iso3_time_point']
+    elif purpose == 'inference':
+        _tile_keys_and_times = (
+            tile_keys_and_times
+            .reset_index()
+            .loc[:, ['tile_key', 'iso3_time_point']]
+            .drop_duplicates()
+            .set_index('tile_key')
+            .loc[:, 'iso3_time_point']
+            .rename('time_point')
+            .to_frame()
+        )
+        _tile_keys_and_times['year'] = _tile_keys_and_times['time_point'].str.split('q').str[0]
+        _tile_keys_and_times['quarter'] = _tile_keys_and_times['time_point'].str.split('q').str[1]
+        _tile_keys_and_times = _tile_keys_and_times.set_index('year', append=True).join(
+            (
+                    pd.DataFrame(
+                    itertools.product(
+                        _tile_keys_and_times.index.unique(), _tile_keys_and_times['year'].unique()
+                    ),
+                    columns=['tile_key', 'year']
+                )
+                .set_index(['tile_key', 'year'])
+                .sort_index()
+            ),
+            how='outer'
+        ).reset_index('year')
+        _tile_keys_and_times['quarter'] = _tile_keys_and_times['quarter'].fillna('1')
+        _tile_keys_and_times['time_point'] = _tile_keys_and_times['year'] + 'q' + _tile_keys_and_times['quarter']
+        tile_keys_and_times = tile_keys_and_times.join(_tile_keys_and_times['time_point'])
+        tile_keys_and_times['year'] = (
+            tile_keys_and_times['time_point'].str.split('q').str[0].astype(int)
+            + (tile_keys_and_times['time_point'].str.split('q').str[1].astype(int) - 1) / 4
+        )
+        tile_keys_and_times['iso3_year'] = (
+            tile_keys_and_times['iso3_time_point'].str.split('q').str[0].astype(int)
+            + (tile_keys_and_times['iso3_time_point'].str.split('q').str[1].astype(int) - 1) / 4
+        )
+        tile_keys_and_times['distance'] = (tile_keys_and_times['year'] - tile_keys_and_times['iso3_year']).abs()
+        tile_keys_and_times = (
+            tile_keys_and_times
+            .sort_values('distance')
+            .groupby(['tile_key', 'time_point', 'iso3'])['iso3_time_point']
+            .first()
+            .reset_index(['time_point', 'iso3'])
+        )
+    else:
+        raise ValueError(f'Unexpected purpose: {purpose}')
+    tile_keys_and_times['iso3_time_point'] = (
+        tile_keys_and_times['iso3'] + '|' + tile_keys_and_times['iso3_time_point']
+    )
+    tile_keys_and_times = (
+        tile_keys_and_times
+        .groupby(['tile_key', 'time_point'])['iso3_time_point']
+        .apply(lambda x: ','.join(x.to_list()))
+        .sort_index()
+    )
 
     to_run = [
-        (tile_key, time_point, ",".join(iso3s))
-        for (tile_key, time_point), iso3s in tile_keys_and_times.items()
+        (tile_key, time_point, iso3_time_points)
+        for (tile_key, time_point), iso3_time_points in tile_keys_and_times.items()
     ]
     return to_run
 
@@ -225,10 +298,12 @@ def process_model_gdf(
         denominator_df["admin_built"] = denominator_df.groupby("admin_id")[
             "isection_built"
         ].transform("sum")
-        if denominator[:4] == "msft":
+        if denominator.startswith("microsoft"):
             low_density = denominator_df["admin_built"] < min_admin_density
             denominator_df.loc[low_density, "admin_built"] = 0.0
             denominator_df.loc[low_density, "isection_built"] = 0.0
+        elif not denominator.startswith("ghsl"):
+            raise ValueError(f"Unexpected denominator: {denominator}")
 
         denominator_df[f"admin_{denominator}"] = safe_divide(
             denominator_df["admin_built"], model_gdf["admin_area"]

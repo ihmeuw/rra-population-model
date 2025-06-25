@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Any
+from typing import Any, List
 import itertools
 
 import geopandas as gpd
@@ -20,14 +20,13 @@ from rra_population_model.model_prep.training_data.metadata import (
 def get_intersecting_admins(
     tile_meta: TileMetadata,
     iso3_list: str,
-    time_point: str,
+    time_points: List[str],
     pm_data: PopulationModelData,
 ) -> gpd.GeoDataFrame:
-    year = time_point.split("q")[0]
-
     admin_data = []
-    for iso in iso3_list:
-        a = pm_data.load_census_data(iso, year, tile_meta.polygon)
+    for iso3, time_point in zip(iso3_list, time_points):
+        year = time_point.split("q")[0]
+        a = pm_data.load_census_data(iso3, year, tile_meta.polygon)
         # Need to intersect again with the tile poly because we load based on the
         # intersection with the bounding box.
         is_max_admin = a.admin_level == a.admin_level.max()

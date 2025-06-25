@@ -29,9 +29,10 @@ def training_data_main(
     model_frame = pm_data.load_modeling_frame(resolution)
     tile_meta = TileMetadata.from_model_frame(model_frame, tile_key)
 
+    iso3_year_list = [i.split('|') for i in iso3_year_list.split(",")]
     iso3_year_dict = (
         pd.DataFrame(
-            [iso3_time_point.split('|') for iso3_time_point in iso3_year_list.split(",")],
+            [iso3_time_point for iso3_time_point in iso3_year_list],
             columns=['iso3', 'time_point']
         )
         .groupby(['time_point'])['iso3'].apply(list)
@@ -43,7 +44,7 @@ def training_data_main(
         admins = utils.get_intersecting_admins(
             tile_meta=tile_meta,
             iso3_list=iso3_list,
-            time_point=data_time_point,
+            time_points=[data_time_point] * len(iso3_list),
             pm_data=pm_data,
         )
         if admins.empty:
@@ -77,6 +78,12 @@ def training_data_main(
     print("Processing model gdf")
     model_gdf = pd.concat(model_gdfs, ignore_index=True)
     model_gdf['time_point'] = time_point
+    admins = utils.get_intersecting_admins(
+        tile_meta=tile_meta,
+        iso3_list=[i[0] for i in iso3_year_list],
+        time_points=[i[1] for i in iso3_year_list],
+        pm_data=pm_data,
+    )
     training_meta = get_training_metadata(
         tile_meta=tile_meta,
         model_frame=model_frame,

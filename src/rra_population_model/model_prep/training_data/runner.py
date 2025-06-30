@@ -1,5 +1,6 @@
 import itertools
 from pathlib import Path
+from typing import List
 
 import click
 import pandas as pd
@@ -116,7 +117,7 @@ def training_data_main(
     if purpose == 'training':
         out_measures = ["population", "occupancy_rate", "log_occupancy_rate"]
     elif purpose == 'inference':
-        out_measures = ["occupancy_rate"]  # , "density", "residential_volume"
+        out_measures = ["occupancy_rate"]  # "population", "density", "residential_volume"
     training_rasters = [
         f"{m}_{d}"
         for m, d in itertools.product(out_measures, training_meta.denominators)
@@ -140,8 +141,18 @@ def training_data_main(
             resolution,
             time_point,
             tile_key,
-            tile_rasters,
+            admin_gdf,
         )
+    else:
+        raise ValueError(f'Unexpected data purpose: {purpose}')
+
+
+def build_and_save_summary_people_per_structure(
+    pm_data: PopulationModelData,
+    resolution: str,
+    time_points: List[str],
+):
+    pass
 
 
 @click.command()
@@ -200,7 +211,7 @@ def training_data(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "30G",
+            "memory": "40G",
             "runtime": "60m",
             "project": "proj_rapidresponse",
         },
@@ -212,9 +223,12 @@ def training_data(
         msg = f"Workflow failed with status {status}."
         raise RuntimeError(msg)
 
+    print("Building summary datasets.")
     if purpose == 'training':
-        print("Building summary datasets.")
         people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
         pm_data.save_summary_people_per_structure(people_per_structure, resolution)
-    elif purpose != 'inference':
+    elif purpose == 'inference':
+        people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
+        pm_data.save_summary_people_per_structure(people_per_structure, resolution)
+    else:
         raise ValueError(f'Unexpected data purpose: {purpose}')

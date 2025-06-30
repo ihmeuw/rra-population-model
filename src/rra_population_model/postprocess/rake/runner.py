@@ -36,6 +36,9 @@ def rake_main(
         filters=[("block_key", "==", block_key)],
     )
 
+    if ...:
+        print("Loading inference data")
+
     print("Raking")
     if raking_data.empty:
         raking_factor = rt.RasterArray(
@@ -66,6 +69,9 @@ def rake_main(
             no_data_value=np.nan,
         )
         raked = unraked_data * raking_factor
+
+        if ...:
+            print("Splicing in inference data")
 
     print("Saving raked prediction")
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)

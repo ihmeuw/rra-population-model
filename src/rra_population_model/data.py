@@ -583,15 +583,14 @@ class PopulationModelData:
         resolution: str,
         time_point: str,
         tile_key: str,
-        tile_rasters: dict[str, rt.RasterArray],
+        tile_gdf: gpd.GeoDataFrame,
     ) -> None:
         root = self.tile_inference_data_root(resolution) / time_point / tile_key
         mkdir(root, exist_ok=True, parents=True)
 
-        for measure, raster in tile_rasters.items():
-            raster_path = root / f"{measure}.tif"
-            touch(raster_path, clobber=True)
-            save_raster(raster, raster_path)
+        gdf_path = root / "people_per_structure.parquet"
+        touch(gdf_path, clobber=True)
+        tile_gdf.to_parquet(gdf_path)
 
     def load_people_per_structure(
         self, resolution: str, tile_key: str | None = None

@@ -29,7 +29,7 @@ def training_data_main(
     model_frame = pm_data.load_modeling_frame(resolution)
     tile_meta = TileMetadata.from_model_frame(model_frame, tile_key)
 
-    iso3_year_list = [i.split('|') for i in iso3_year_list.split(",")]
+    iso3_year_list = [i.split(':') for i in iso3_year_list.split(",")]
     iso3_year_dict = (
         pd.DataFrame(
             [iso3_time_point for iso3_time_point in iso3_year_list],
@@ -186,8 +186,8 @@ def training_data(
 
     print("Building arg list")
     to_run = utils.build_arg_list(resolution, pm_data, purpose)
-    print(f"Building test/train data for {len(to_run)} tiles.")
 
+    print(f"Building test/train data for {len(to_run)} tiles.")
     status = jobmon.run_parallel(
         runner="pmtask model_prep",
         task_name="training_data",

@@ -141,7 +141,7 @@ def build_arg_list(
     else:
         raise ValueError(f'Unexpected purpose: {purpose}')
     tile_keys_and_times['iso3_time_point'] = (
-        tile_keys_and_times['iso3'] + '|' + tile_keys_and_times['iso3_time_point']
+        tile_keys_and_times['iso3'] + ':' + tile_keys_and_times['iso3_time_point']
     )
     tile_keys_and_times = (
         tile_keys_and_times

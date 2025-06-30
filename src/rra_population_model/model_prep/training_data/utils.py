@@ -51,15 +51,23 @@ def get_data_locations_and_years(
     purpose: str,
 ) -> list[tuple[str, str, str]]:
     """Get the locations and years for which we have training data."""
+    available_census_years = pm_data.list_census_data()
+    model_years = list(set([tp.split('q')[0] for tp in pmc.BUILT_VERSIONS["microsoft_v7"].time_points]))
+    available_census_years = [i for i in available_census_years if i[1] in model_years]
     if purpose == 'training':
         available_census_years = [
-            ("MEX", "2020", "1"),
-            ("USA", "2020", "1"),
+            i for i in available_census_years
+            if i[0] in ["MEX", "USA"] and i[1] == "2020"
         ]
     elif purpose == 'inference':
-        available_census_years = pm_data.list_census_data()
-        model_years = list(set([tp.split('q')[0] for tp in pmc.BUILT_VERSIONS["microsoft_v7"].time_points]))
-        available_census_years = [i for i in available_census_years if i[1] in model_years]
+        inference_countries = [
+            "MEX",  # Mexico
+            "USA",  # United States
+        ]
+        available_census_years = [
+            i for i in available_census_years
+            if i[0] in inference_countries
+        ]
     return available_census_years
 
 

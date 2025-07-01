@@ -110,7 +110,7 @@ def train(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    today, last_version = utils.get_last_run_version(output_dir)
+    today, last_version = utils.get_last_run_version(pm_data.model_root(resolution))
     node_args = []
     for i, (denom, ntl) in enumerate(itertools.product(denominator, ntl_option)):
         version = f"{today}.{last_version + i + 1:03d}"
@@ -132,7 +132,7 @@ def train(
             "queue": queue,
             "cores": 1,
             "memory": "240G",
-            "runtime": "120m",
+            "runtime": "150m",
             "project": "proj_rapidresponse",
         },
         log_root=pm_data.log_dir("model_train"),

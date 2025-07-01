@@ -15,10 +15,13 @@ from rra_population_model.model_prep.features.built import (
 from rra_population_model.model_prep.features.metadata import get_feature_metadata
 from rra_population_model.model_prep.features.ntl import process_ntl
 
-# GHSL first, as we need the height and residential mask for msft
+# GHSL first, as we need the residential mask for msft
 BUILT_VERSIONS = [
     # pmc.BUILT_VERSIONS["ghsl_r2023a"],
-    pmc.BUILT_VERSIONS["microsoft_v7"],
+    # pmc.BUILT_VERSIONS["microsoft_v6"],
+    # pmc.BUILT_VERSIONS["microsoft_v7"],
+    pmc.BUILT_VERSIONS["microsoft_v7_1"],
+    pmc.BUILT_VERSIONS["microsoft_v7_e101"],
 ]
 
 
@@ -172,8 +175,8 @@ def features(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "15G",
-            "runtime": "30m",
+            "memory": "5G",
+            "runtime": "10m",
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },

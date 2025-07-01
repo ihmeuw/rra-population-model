@@ -154,7 +154,7 @@ def training_data(
             "queue": queue,
             "cores": 1,
             "memory": "30G",
-            "runtime": "60m",
+            "runtime": "30m",
             "project": "proj_rapidresponse",
         },
         max_attempts=5,

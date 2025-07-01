@@ -583,14 +583,15 @@ class PopulationModelData:
         resolution: str,
         time_point: str,
         tile_key: str,
-        tile_gdf: gpd.GeoDataFrame,
+        tile_rasters: dict[str, rt.RasterArray],
     ) -> None:
         root = self.tile_inference_data_root(resolution) / time_point / tile_key
         mkdir(root, exist_ok=True, parents=True)
 
-        gdf_path = root / "people_per_structure.parquet"
-        touch(gdf_path, clobber=True)
-        tile_gdf.to_parquet(gdf_path)
+        for measure, raster in tile_rasters.items():
+            raster_path = root / f"{measure}.tif"
+            touch(raster_path, clobber=True)
+            save_raster(raster, raster_path)
 
     def load_people_per_structure(
         self, resolution: str, tile_key: str | None = None
@@ -625,6 +626,23 @@ class PopulationModelData:
     ) -> rt.RasterArray:
         path = self.tile_training_data_root(resolution) / tile_key / f"{measure}.tif"
         return rt.load_raster(path)
+
+    def load_tile_inference_data(
+        self,
+        resolution: str,
+        tile_keys: list[str],
+        time_point: str,
+        measure: str,
+    ) -> rt.RasterArray:
+        paths = [
+            self.tile_inference_data_root(resolution) / time_point / tile_key / f"{measure}.tif"
+            for tile_key in tile_keys
+        ]
+        paths = [path for path in paths if path.exists()]
+        if paths:
+            return rt.load_mf_raster(paths)
+        else:
+            return None
 
     def model_root(self, resolution: str) -> Path:
         return self.resolution_root(resolution) / "models"

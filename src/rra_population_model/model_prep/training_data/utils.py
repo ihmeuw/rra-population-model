@@ -61,12 +61,19 @@ def get_data_locations_and_years(
         ]
     elif purpose == 'inference':
         inference_countries = [
+            "DNK",  # Denmark
+            "FIN",  # Finland
+            "FRA",  # France
             "MEX",  # Mexico
+            "MYS",  # Malaysia
+            "PAN",  # Panama
+            "SWE",  # Sweden
+            "TUR",  # Turkey
             "USA",  # United States
         ]
         available_census_years = [
             i for i in available_census_years
-            if i[0] in inference_countries
+            if i[0] in inference_countries and i[1] == "2020"
         ]
     return available_census_years
 
@@ -112,23 +119,23 @@ def build_arg_list(
             .rename('time_point')
             .to_frame()
         )
-        _tile_keys_and_times['year'] = _tile_keys_and_times['time_point'].str.split('q').str[0]
-        _tile_keys_and_times['quarter'] = _tile_keys_and_times['time_point'].str.split('q').str[1]
-        _tile_keys_and_times = _tile_keys_and_times.set_index('year', append=True).join(
-            (
-                    pd.DataFrame(
-                    itertools.product(
-                        _tile_keys_and_times.index.unique(), _tile_keys_and_times['year'].unique()
-                    ),
-                    columns=['tile_key', 'year']
-                )
-                .set_index(['tile_key', 'year'])
-                .sort_index()
-            ),
-            how='outer'
-        ).reset_index('year')
-        _tile_keys_and_times['quarter'] = _tile_keys_and_times['quarter'].fillna('1')
-        _tile_keys_and_times['time_point'] = _tile_keys_and_times['year'] + 'q' + _tile_keys_and_times['quarter']
+        # _tile_keys_and_times['year'] = _tile_keys_and_times['time_point'].str.split('q').str[0]
+        # _tile_keys_and_times['quarter'] = _tile_keys_and_times['time_point'].str.split('q').str[1]
+        # _tile_keys_and_times = _tile_keys_and_times.set_index('year', append=True).join(
+        #     (
+        #             pd.DataFrame(
+        #             itertools.product(
+        #                 _tile_keys_and_times.index.unique(), _tile_keys_and_times['year'].unique()
+        #             ),
+        #             columns=['tile_key', 'year']
+        #         )
+        #         .set_index(['tile_key', 'year'])
+        #         .sort_index()
+        #     ),
+        #     how='outer'
+        # ).reset_index('year')
+        # _tile_keys_and_times['quarter'] = _tile_keys_and_times['quarter'].fillna('1')
+        # _tile_keys_and_times['time_point'] = _tile_keys_and_times['year'] + 'q' + _tile_keys_and_times['quarter']
         tile_keys_and_times = tile_keys_and_times.join(_tile_keys_and_times['time_point'])
         tile_keys_and_times['year'] = (
             tile_keys_and_times['time_point'].str.split('q').str[0].astype(int)

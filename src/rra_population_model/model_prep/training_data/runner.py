@@ -30,6 +30,8 @@ def training_data_main(
     model_frame = pm_data.load_modeling_frame(resolution)
     tile_meta = TileMetadata.from_model_frame(model_frame, tile_key)
 
+    print("SOMETHING ABOUT LINKING YEARS SO WE DON'T WRITE")
+
     iso3_year_list = [i.split(':') for i in iso3_year_list.split(",")]
     iso3_year_dict = (
         pd.DataFrame(
@@ -41,36 +43,16 @@ def training_data_main(
     )
     model_gdfs = []
     for data_time_point, iso3_list in iso3_year_dict.items():
-        print(f"{data_time_point} - Finding intersecting admin units ({','.join(iso3_list)})")
-        admins = utils.get_intersecting_admins(
-            tile_meta=tile_meta,
-            iso3_list=iso3_list,
-            time_points=[data_time_point] * len(iso3_list),
-            pm_data=pm_data,
+        n_tile_gdfs = get_tile_gdf(
+            pm_data,
+            tile_meta,
+            iso3_list,
+            data_time_point,
+            model_frame,
+            resolution,
         )
-        if admins.empty:
-            continue
-
-        print(f"{data_time_point} - Getting training metadata")
-        training_meta = get_training_metadata(
-            tile_meta=tile_meta,
-            model_frame=model_frame,
-            resolution=resolution,
-            time_point=data_time_point,
-            intersecting_admins=admins,
-            pm_data=pm_data,
-        )
-
-        print(f"{data_time_point} - Loading model gdfs")
-        for n_tile_meta in training_meta.tile_neighborhood:
-            print(n_tile_meta.key)
-            n_tile_gdf = utils.get_tile_feature_gdf(
-                n_tile_meta,
-                training_meta,
-                pm_data,
-            )
-            if not n_tile_gdf.empty:
-                model_gdfs.append(n_tile_gdf)
+        for n_tile_gdf in n_tile_gdfs:
+            model_gdfs.append(n_tile_gdf)
 
     if not model_gdfs:
         print("No intersecting admin units found. Likely open ocean.")
@@ -109,7 +91,7 @@ def training_data_main(
     raster_template = pm_data.load_feature(
         resolution=resolution,
         block_key=tile_meta.block_key,
-        feature_name=training_meta.denominators[0],
+        feature_name=denominator,
         time_point=time_point,
         subset_bounds=tile_meta.polygon,
     )
@@ -117,7 +99,7 @@ def training_data_main(
     if purpose == 'training':
         out_measures = ["population", "occupancy_rate", "log_occupancy_rate"]
     elif purpose == 'inference':
-        out_measures = ["occupancy_rate"]  # "population", "density", "residential_volume"
+        out_measures = ["occupancy_rate"]
     training_rasters = [
         f"{m}_{d}"
         for m, d in itertools.product(out_measures, training_meta.denominators)
@@ -126,6 +108,19 @@ def training_data_main(
     for raster_name in training_rasters:
         raster = utils.raster_from_pixel_feature(tile_gdf, raster_name, raster_template)
         tile_rasters[raster_name] = raster
+
+    if purpose == 'inference':
+        for denominator in training_meta.denominators:
+            denominator_raster = pm_data.load_feature(
+                resolution=resolution,
+                block_key=tile_meta.block_key,
+                feature_name=denominator,
+                time_point=time_point,
+                subset_bounds=tile_meta.polygon,
+            )
+            tile_rasters[f"population_{denominator}"] = (
+                tile_rasters[f"occupancy_rate_{denominator}"] * denominator_raster
+            )
 
     print("Saving")
     if purpose == 'training':
@@ -141,18 +136,52 @@ def training_data_main(
             resolution,
             time_point,
             tile_key,
-            admin_gdf,
+            tile_rasters,
         )
     else:
         raise ValueError(f'Unexpected data purpose: {purpose}')
 
 
-def build_and_save_summary_people_per_structure(
-    pm_data: PopulationModelData,
-    resolution: str,
-    time_points: List[str],
+def get_tile_gdf(
+    pm_data,
+    tile_meta,
+    iso3_list,
+    data_time_point,
+    model_frame,
+    resolution,
 ):
-    pass
+    print(f"{data_time_point} - Finding intersecting admin units ({','.join(iso3_list)})")
+    admins = utils.get_intersecting_admins(
+        tile_meta=tile_meta,
+        iso3_list=iso3_list,
+        time_points=[data_time_point] * len(iso3_list),
+        pm_data=pm_data,
+    )
+    if admins.empty:
+        return []
+
+    print(f"{data_time_point} - Getting training metadata")
+    training_meta = get_training_metadata(
+        tile_meta=tile_meta,
+        model_frame=model_frame,
+        resolution=resolution,
+        time_point=data_time_point,
+        intersecting_admins=admins,
+        pm_data=pm_data,
+    )
+
+    print(f"{data_time_point} - Loading model gdfs")
+    n_tile_gdfs = []
+    for n_tile_meta in training_meta.tile_neighborhood:
+        print(n_tile_meta.key)
+        n_tile_gdf = utils.get_tile_feature_gdf(
+            n_tile_meta,
+            training_meta,
+            pm_data,
+        )
+        if not n_tile_gdf.empty:
+            n_tile_gdfs.append(n_tile_gdf)
+    return n_tile_gdfs
 
 
 @click.command()
@@ -223,12 +252,9 @@ def training_data(
         msg = f"Workflow failed with status {status}."
         raise RuntimeError(msg)
 
-    print("Building summary datasets.")
     if purpose == 'training':
+        print("Building summary datasets.")
         people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
         pm_data.save_summary_people_per_structure(people_per_structure, resolution)
-    elif purpose == 'inference':
-        people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
-        pm_data.save_summary_people_per_structure(people_per_structure, resolution)
-    else:
+    elif purpose != 'inference':
         raise ValueError(f'Unexpected data purpose: {purpose}')

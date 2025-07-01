@@ -36,9 +36,6 @@ def rake_main(
         filters=[("block_key", "==", block_key)],
     )
 
-    if ...:
-        print("Loading inference data")
-
     print("Raking")
     if raking_data.empty:
         raking_factor = rt.RasterArray(
@@ -71,7 +68,20 @@ def rake_main(
         raked = unraked_data * raking_factor
 
         if ...:
-            print("Splicing in inference data")
+            print("Loading inference data")
+            model_frame = pm_data.load_modeling_frame(resolution)
+            model_frame = model_frame.loc[model_frame['block_key'] == block_key]
+            inference_data = pm_data.load_tile_inference_data(
+                resolution,
+                model_frame['tile_key'].to_list(),
+                time_point,
+                f'population_{model_spec.denominator}',
+            )
+            if inference_data is None:
+                print("No inference data for this block")
+            else:
+                print("Splicing in inference data")
+                ...
 
     print("Saving raked prediction")
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)

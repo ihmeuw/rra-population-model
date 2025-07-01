@@ -28,7 +28,10 @@ def load_admin_populations(
     # Interpolate the time point population
     if "q" in time_point:
         year, quarter = (int(s) for s in time_point.split("q"))
-        next_year = min(year + 1, 2100)
+        if RAKING_VERSION == "gbd_2023":
+            next_year = min(year + 1, 2024)
+        else:
+            next_year = min(year + 1, 2100)
         weight = (int(quarter) - 1) / 4
 
         prior_year_pop = all_pop.loc[year]

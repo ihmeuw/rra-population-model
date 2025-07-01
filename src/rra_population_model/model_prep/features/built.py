@@ -132,7 +132,7 @@ class ProcessStrategy(ProcessingStrategy):
         if self.built_version.name == "ghsl_r2023a":
             # No derived measures for GHSL
             return {}
-        elif self.built_version.name in ["microsoft_v6", "microsoft_v7"]:
+        elif self.built_version.name.startswith("microsoft"):
             return _generate_microsoft_derived_measures(pm_data, self.feature_metadata, self.built_version.name)
         else:
             msg = f"Unknown built version: {self.built_version.name}"
@@ -267,6 +267,16 @@ def _generate_microsoft_derived_measures(
         "microsoft_v7": {
             "density": "microsoft_v7_density",
             "height": "microsoft_v7_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v7_1": {
+            "density": "microsoft_v7_1_density",
+            "height": "microsoft_v7_1_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v7_e101": {
+            "density": "microsoft_v7_e101_density",
+            "height": "microsoft_v7_e101_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
         },
     }[built_version_name]

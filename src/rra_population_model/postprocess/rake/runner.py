@@ -3,11 +3,14 @@ import numpy as np
 import rasterra as rt
 from rasterra._features import raster_geometry_mask
 from rra_tools import jobmon
+import tqdm
 
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
+
+TO_RAKE = 'raked'
 
 
 def rake_main(
@@ -25,9 +28,14 @@ def rake_main(
         pm_data, resolution, version, time_point
     )
     print("Loading unraked prediction")
-    unraked_data = pm_data.load_raw_prediction(
-        block_key, prediction_time_point, model_spec
-    )
+    if TO_RAKE == 'raw':
+        unraked_data = pm_data.load_raw_prediction(
+            block_key, prediction_time_point, model_spec
+        )
+    elif TO_RAKE == 'raked':
+        unraked_data = pm_data.load_raked_prediction(
+            block_key, prediction_time_point, model_spec
+        )
 
     print("Loading raking factors")
     raking_data = pm_data.load_raking_factors(
@@ -67,21 +75,79 @@ def rake_main(
         )
         raked = unraked_data * raking_factor
 
-        if ...:
+        if TO_RAKE == 'raw':
             print("Loading inference data")
             model_frame = pm_data.load_modeling_frame(resolution)
             model_frame = model_frame.loc[model_frame['block_key'] == block_key]
-            inference_data = pm_data.load_tile_inference_data(
-                resolution,
-                model_frame['tile_key'].to_list(),
-                time_point,
-                f'population_{model_spec.denominator}',
-            )
-            if inference_data is None:
-                print("No inference data for this block")
-            else:
+            census_population = []
+            census_weight = []
+            for tile_key in tqdm.tqdm(model_frame['tile_key'].to_list()):
+                tile_census_population = pm_data.load_tile_inference_data(
+                    resolution,
+                    tile_key,
+                    time_point,
+                    f'population_{model_spec.denominator}',
+                )
+                if tile_census_population is None:
+                    tile_census_population = pm_data.load_feature(
+                        resolution=resolution,
+                        block_key=block_key,
+                        feature_name=model_spec.denominator,
+                        time_point=time_point,
+                        subset_bounds=model_frame[model_frame.tile_key == tile_key].geometry.iloc[0],
+                    )
+                    tile_census_population = rt.RasterArray(
+                        np.zeros_like(tile_census_population),
+                        transform=tile_census_population.transform,
+                        crs=tile_census_population.crs,
+                        no_data_value=np.nan,
+                    )
+                    tile_census_weight = rt.RasterArray(
+                        np.zeros_like(tile_census_population),
+                        transform=tile_census_population.transform,
+                        crs=tile_census_population.crs,
+                        no_data_value=np.nan,
+                    )
+                else:
+                    tile_census_weight = pm_data.load_tile_inference_data(
+                        resolution,
+                        tile_key,
+                        time_point,
+                        'area_weight',
+                    )
+                census_population.append(tile_census_population)
+                census_weight.append(tile_census_weight)
+
+            census_population = rt.merge(census_population)
+            if np.nansum(census_population) > 0 and np.nansum(raked) > 0:
+                array = census_population.to_numpy()
+                nan_mask = np.isnan(array)
+                array[nan_mask] = 0
+                census_population = rt.RasterArray(
+                    array,
+                    transform=raked.transform,
+                    crs=raked.crs,
+                    no_data_value=np.nan,
+                )
+
+                census_weight = rt.merge(census_weight)
+                array = census_weight.to_numpy()
+                nan_mask = np.isnan(array)
+                array[nan_mask] = 0
+                census_weight = rt.RasterArray(
+                    array,
+                    transform=raked.transform,
+                    crs=raked.crs,
+                    no_data_value=np.nan,
+                )
+
                 print("Splicing in inference data")
-                ...
+                raked = (
+                    (raked * (1 - census_weight))
+                    + (census_population * census_weight)
+                )
+            else:
+                print("No population to splice")
 
     print("Saving raked prediction")
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)

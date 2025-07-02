@@ -18,7 +18,7 @@ from rra_population_model.model_prep.training_data.metadata import (
 
 def training_data_main(
     resolution: str,
-    iso3_year_list: str,
+    iso3_time_point_list: str,
     tile_key: str,
     time_point: str,
     purpose: str,
@@ -30,43 +30,18 @@ def training_data_main(
     model_frame = pm_data.load_modeling_frame(resolution)
     tile_meta = TileMetadata.from_model_frame(model_frame, tile_key)
 
-    print("SOMETHING ABOUT LINKING YEARS SO WE DON'T WRITE")
-
-    iso3_year_list = [i.split(':') for i in iso3_year_list.split(",")]
-    iso3_year_dict = (
-        pd.DataFrame(
-            [iso3_time_point for iso3_time_point in iso3_year_list],
-            columns=['iso3', 'time_point']
-        )
-        .groupby(['time_point'])['iso3'].apply(list)
-        .to_dict()
+    iso3_time_point_list = [i.split(':') for i in iso3_time_point_list.split(",")]
+    print("Finding intersecting admin units")
+    admins = utils.get_intersecting_admins(
+        tile_meta=tile_meta,
+        iso3_time_point_list=iso3_time_point_list,
+        pm_data=pm_data,
     )
-    model_gdfs = []
-    for data_time_point, iso3_list in iso3_year_dict.items():
-        n_tile_gdfs = get_tile_gdf(
-            pm_data,
-            tile_meta,
-            iso3_list,
-            data_time_point,
-            model_frame,
-            resolution,
-        )
-        for n_tile_gdf in n_tile_gdfs:
-            model_gdfs.append(n_tile_gdf)
-
-    if not model_gdfs:
+    if admins.empty:
         print("No intersecting admin units found. Likely open ocean.")
         return
 
-    print("Processing model gdf")
-    model_gdf = pd.concat(model_gdfs, ignore_index=True)
-    model_gdf['time_point'] = time_point
-    admins = utils.get_intersecting_admins(
-        tile_meta=tile_meta,
-        iso3_list=[i[0] for i in iso3_year_list],
-        time_points=[i[1] for i in iso3_year_list],
-        pm_data=pm_data,
-    )
+    print("Getting training metadata")
     training_meta = get_training_metadata(
         tile_meta=tile_meta,
         model_frame=model_frame,
@@ -75,23 +50,87 @@ def training_data_main(
         intersecting_admins=admins,
         pm_data=pm_data,
     )
-    model_gdf = utils.process_model_gdf(model_gdf, training_meta)
-    admin_gdf = utils.filter_to_admin_gdf(model_gdf, training_meta)
+
+    model_gdfs = []
+    data_time_point_list = list(set([i[1] for i in iso3_time_point_list] + [time_point]))
+    for data_time_point in data_time_point_list:
+        print(f"Loading model gdfs -- {data_time_point}")
+        time_point_model_gdfs = []
+        for n_tile_meta in training_meta.tile_neighborhood:
+            print(n_tile_meta.key)
+            n_tile_gdf = utils.get_tile_feature_gdf(
+                tile_meta=n_tile_meta,
+                training_meta=training_meta,
+                pm_data=pm_data,
+                time_point=data_time_point,
+            )
+            if not n_tile_gdf.empty:
+                time_point_model_gdfs.append(n_tile_gdf)
+
+        print(f"Processing model gdf-- {data_time_point}")
+        time_point_model_gdf = pd.concat(
+            time_point_model_gdfs, ignore_index=True
+        )
+        time_point_model_gdf = utils.process_model_gdf(
+            time_point_model_gdf, training_meta
+        )
+        model_gdfs.append(time_point_model_gdf)
+    model_gdf = pd.concat(model_gdfs, ignore_index=True)
     tile_gdf = model_gdf[model_gdf["tile_key"] == tile_key]
 
     if purpose == 'training':
+        model_gdf = model_gdf.loc[model_gdf['time_point'] == time_point]
+        admin_gdf = utils.filter_to_admin_gdf(model_gdf, training_meta)
+
         print("Calculating pixel area weights")
         pixel_area_weight = (
             tile_gdf.groupby(["admin_id", "pixel_id"])[["admin_area_weight"]]
             .first()
             .reset_index()
         )
+    elif purpose == 'inference':
+        tile_gdfs = []
+        for data_time_point in data_time_point_list:
+            time_point_tile_gdfs = []
+            for denominator in training_meta.denominators:
+                pixel_occupancy_rate = (
+                    tile_gdf
+                    .loc[(tile_gdf['census_time_point'] == data_time_point) & (tile_gdf['time_point'] == data_time_point)]
+                    .set_index(['admin_id', 'pixel_id'])
+                    .loc[:, f'pixel_occupancy_rate_{denominator}']
+                )
+                pixel_built = (
+                    tile_gdf
+                    .loc[(tile_gdf['census_time_point'] == data_time_point) & (tile_gdf['time_point'] == time_point)]
+                    .set_index(['admin_id', 'pixel_id'])
+                    .loc[:, f'pixel_built_{denominator}']
+                )
+                time_point_tile_gdfs.append(
+                    (pixel_occupancy_rate * pixel_built)
+                    .rename(f'pixel_population_{denominator}')
+                )
+            tile_gdfs.append(
+                pd.concat(time_point_tile_gdfs, axis=1).reset_index()
+            )
+        multi_tile = (
+            tile_gdf
+            .loc[tile_gdf['time_point'] == time_point]
+            .loc[:, ['admin_id', 'pixel_id', 'pixel_multi_tile']]
+        )
+        area_weight = (
+            tile_gdf
+            .loc[tile_gdf['time_point'] == time_point]
+            .loc[:, ['admin_id', 'pixel_id', 'pixel_area_weight']]
+        )
+        tile_gdf = pd.concat(tile_gdfs, ignore_index=True).merge(multi_tile).merge(area_weight)
+    else:
+        raise ValueError(f'Invalid purpose: {purpose}')
 
-    print("rasterizing features")
+    print("Rasterizing features")
     raster_template = pm_data.load_feature(
         resolution=resolution,
         block_key=tile_meta.block_key,
-        feature_name=denominator,
+        feature_name=training_meta.denominators[0],
         time_point=time_point,
         subset_bounds=tile_meta.polygon,
     )
@@ -99,28 +138,26 @@ def training_data_main(
     if purpose == 'training':
         out_measures = ["population", "occupancy_rate", "log_occupancy_rate"]
     elif purpose == 'inference':
-        out_measures = ["occupancy_rate"]
+        out_measures = ["population"]
     training_rasters = [
         f"{m}_{d}"
         for m, d in itertools.product(out_measures, training_meta.denominators)
     ] + ["multi_tile"]
+    if purpose == "inference":
+        training_rasters.append("area_weight")
     tile_rasters = {}
     for raster_name in training_rasters:
         raster = utils.raster_from_pixel_feature(tile_gdf, raster_name, raster_template)
         tile_rasters[raster_name] = raster
-
-    if purpose == 'inference':
-        for denominator in training_meta.denominators:
-            denominator_raster = pm_data.load_feature(
-                resolution=resolution,
-                block_key=tile_meta.block_key,
-                feature_name=denominator,
-                time_point=time_point,
-                subset_bounds=tile_meta.polygon,
-            )
-            tile_rasters[f"population_{denominator}"] = (
-                tile_rasters[f"occupancy_rate_{denominator}"] * denominator_raster
-            )
+    import numpy as np
+    print(
+        f"Raster total: {np.nansum(tile_rasters['population_microsoft_v7_1_residential_volume'])}"
+    )
+    model_gdf = model_gdf.loc[model_gdf['time_point'] == time_point]
+    admin_gdf = utils.filter_to_admin_gdf(model_gdf, training_meta)
+    print(
+        f"Admin total: {admin_gdf['admin_population'].sum()}"
+    )
 
     print("Saving")
     if purpose == 'training':
@@ -142,50 +179,8 @@ def training_data_main(
         raise ValueError(f'Unexpected data purpose: {purpose}')
 
 
-def get_tile_gdf(
-    pm_data,
-    tile_meta,
-    iso3_list,
-    data_time_point,
-    model_frame,
-    resolution,
-):
-    print(f"{data_time_point} - Finding intersecting admin units ({','.join(iso3_list)})")
-    admins = utils.get_intersecting_admins(
-        tile_meta=tile_meta,
-        iso3_list=iso3_list,
-        time_points=[data_time_point] * len(iso3_list),
-        pm_data=pm_data,
-    )
-    if admins.empty:
-        return []
-
-    print(f"{data_time_point} - Getting training metadata")
-    training_meta = get_training_metadata(
-        tile_meta=tile_meta,
-        model_frame=model_frame,
-        resolution=resolution,
-        time_point=data_time_point,
-        intersecting_admins=admins,
-        pm_data=pm_data,
-    )
-
-    print(f"{data_time_point} - Loading model gdfs")
-    n_tile_gdfs = []
-    for n_tile_meta in training_meta.tile_neighborhood:
-        print(n_tile_meta.key)
-        n_tile_gdf = utils.get_tile_feature_gdf(
-            n_tile_meta,
-            training_meta,
-            pm_data,
-        )
-        if not n_tile_gdf.empty:
-            n_tile_gdfs.append(n_tile_gdf)
-    return n_tile_gdfs
-
-
 @click.command()
-@click.option("--iso3-year-list", type=str, required=True)
+@click.option("--iso3-time-point-list", type=str, required=True)
 @clio.with_resolution()
 @clio.with_tile_key()
 @clio.with_time_point()
@@ -193,7 +188,7 @@ def get_tile_gdf(
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def training_data_task(
     resolution: str,
-    iso3_year_list: str,
+    iso3_time_point_list: str,
     tile_key: str,
     time_point: str,
     purpose: str,
@@ -202,7 +197,7 @@ def training_data_task(
     """Build the response for a given tile and time point."""
     training_data_main(
         resolution,
-        iso3_year_list,
+        iso3_time_point_list,
         tile_key,
         time_point,
         purpose,
@@ -231,7 +226,7 @@ def training_data(
     status = jobmon.run_parallel(
         runner="pmtask model_prep",
         task_name="training_data",
-        flat_node_args=(("tile-key", "time-point", "iso3-year-list"), to_run),
+        flat_node_args=(("tile-key", "time-point", "iso3-time-point-list"), to_run),
         task_args={
             "output-dir": output_dir,
             "resolution": resolution,

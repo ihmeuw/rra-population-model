@@ -21,7 +21,6 @@ BUILT_VERSIONS = [
     # pmc.BUILT_VERSIONS["microsoft_v6"],
     # pmc.BUILT_VERSIONS["microsoft_v7"],
     pmc.BUILT_VERSIONS["microsoft_v7_1"],
-    pmc.BUILT_VERSIONS["microsoft_v7_e101"],
 ]
 
 

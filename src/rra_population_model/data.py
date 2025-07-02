@@ -630,17 +630,13 @@ class PopulationModelData:
     def load_tile_inference_data(
         self,
         resolution: str,
-        tile_keys: list[str],
+        tile_key: str,
         time_point: str,
         measure: str,
     ) -> rt.RasterArray:
-        paths = [
-            self.tile_inference_data_root(resolution) / time_point / tile_key / f"{measure}.tif"
-            for tile_key in tile_keys
-        ]
-        paths = [path for path in paths if path.exists()]
-        if paths:
-            return rt.load_mf_raster(paths)
+        path = self.tile_inference_data_root(resolution) / time_point / tile_key / f"{measure}.tif"
+        if path.exists():
+            return rt.load_raster(path)
         else:
             return None
 

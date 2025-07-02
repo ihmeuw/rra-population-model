@@ -15,6 +15,7 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
 RAKING_VERSION = "gbd_2023"
+TO_RAKE = "raked"
 
 
 def load_admin_populations(
@@ -68,7 +69,10 @@ def aggregate_unraked_population(
     pm_data = PopulationModelData()
     model_spec = pm_data.load_model_specification(resolution, model_version)
 
-    r = pm_data.load_raw_prediction(block_key, time_point, model_spec)
+    if TO_RAKE == 'raw':
+        r = pm_data.load_raw_prediction(block_key, time_point, model_spec)
+    elif TO_RAKE == 'raked':
+        r = pm_data.load_raked_prediction(block_key, time_point, model_spec)
     for location_id, geom in shape_map.items():
         est_pop[location_id] = np.nansum(r.mask(geom))  # type: ignore[assignment]
     return est_pop

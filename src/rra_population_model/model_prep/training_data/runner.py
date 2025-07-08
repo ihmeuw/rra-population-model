@@ -149,15 +149,17 @@ def training_data_main(
     for raster_name in training_rasters:
         raster = utils.raster_from_pixel_feature(tile_gdf, raster_name, raster_template)
         tile_rasters[raster_name] = raster
-    import numpy as np
-    print(
-        f"Raster total: {np.nansum(tile_rasters['population_microsoft_v7_1_residential_volume'])}"
-    )
-    model_gdf = model_gdf.loc[model_gdf['time_point'] == time_point]
-    admin_gdf = utils.filter_to_admin_gdf(model_gdf, training_meta)
-    print(
-        f"Admin total: {admin_gdf['admin_population'].sum()}"
-    )
+
+    # import numpy as np
+    # if purpose == "inference":
+    #     print(
+    #         f"Raster total: {np.nansum(tile_rasters['population_microsoft_v7_1_residential_volume'])}"
+    #     )
+    #     model_gdf = model_gdf.loc[model_gdf['time_point'] == time_point]
+    #     admin_gdf = utils.filter_to_admin_gdf(model_gdf, training_meta)
+    #     print(
+    #         f"Admin total: {admin_gdf['admin_population'].sum()}"
+    #     )
 
     print("Saving")
     if purpose == 'training':

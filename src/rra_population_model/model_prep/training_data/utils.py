@@ -16,8 +16,6 @@ from rra_population_model.model_prep.training_data.metadata import (
     TrainingMetadata,
 )
 
-REFERENCE_VERSION = "microsoft_v7_1"
-
 
 def get_intersecting_admins(
     tile_meta: TileMetadata,
@@ -54,8 +52,6 @@ def get_data_locations_and_years(
 ) -> list[tuple[str, str, str]]:
     """Get the locations and years for which we have training data."""
     available_census_years = pm_data.list_census_data()
-    model_years = list(set([tp.split('q')[0] for tp in pmc.BUILT_VERSIONS[REFERENCE_VERSION].time_points]))
-    available_census_years = [i for i in available_census_years if i[1] in model_years]
     if purpose == 'training':
         available_census_years = [
             i for i in available_census_years
@@ -116,7 +112,7 @@ def build_arg_list(
                 pd.concat([
                     tile_keys_and_times, pd.Series(time_point, name='time_point', index=tile_keys_and_times.index)
                 ], axis=1)
-                for time_point in pmc.BUILT_VERSIONS[REFERENCE_VERSION].time_points
+                for time_point in pmc.BUILT_VERSION_TIME_POINTS
             ]
         )
         tile_keys_and_times['year'] = (

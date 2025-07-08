@@ -46,21 +46,21 @@ class BuiltVersion(BaseModel):
 
 
 BUILT_VERSIONS = {
-    "ghsl_r2023a": BuiltVersion(
-        provider="ghsl",
-        version="r2023a",
-        time_points=[f"{y}q1" for y in range(1975, 2030, 5)],
-        measures=[
-            "height",
-            "proportion_residential",
-            "density",
-            "residential_density",
-            "nonresidential_density",
-            "volume",
-            "residential_volume",
-            "nonresidential_volume",
-        ],
-    ),
+    # "ghsl_r2023a": BuiltVersion(
+    #     provider="ghsl",
+    #     version="r2023a",
+    #     time_points=[f"{y}q1" for y in range(1975, 2030, 5)],
+    #     measures=[
+    #         "height",
+    #         "proportion_residential",
+    #         "density",
+    #         "residential_density",
+    #         "nonresidential_density",
+    #         "volume",
+    #         "residential_volume",
+    #         "nonresidential_volume",
+    #     ],
+    # ),
     # "microsoft_v6": BuiltVersion(
     #     provider="microsoft",
     #     version="v6",
@@ -83,7 +83,9 @@ BUILT_VERSIONS = {
     "microsoft_v7_1": BuiltVersion(
         provider="microsoft",
         version="v7_1",
-        time_points=['2020q2', '2024q2'],
+        time_points=[
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+        ][1:-2],
         measures=[
             "density",
             "height",
@@ -114,6 +116,11 @@ FEATURE_AVERAGE_RADII = [
     5000,
     10000,
 ]
+
+BUILT_VERSION_TIME_POINTS = sorted(
+    set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
+)
+
 
 ALL_TIME_POINTS = sorted(
     set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])

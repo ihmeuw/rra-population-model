@@ -130,6 +130,7 @@ def inference(
     pm_data = PopulationModelData(output_dir)
     feature_time_points = pm_data.list_feature_time_points(resolution)
     time_points = clio.convert_choice(time_point, feature_time_points)
+    time_points = sorted([time_point for time_point in time_points if time_point.startswith('202')])
     print(f"Running inference for {len(time_points)} time points.")
 
     jobmon.run_parallel(

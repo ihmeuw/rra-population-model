@@ -27,7 +27,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v6", "v7", "v7_1", "v7_e101", "r2023a"]
+    version: Literal["v6", "v7", "v7_1", "r2023a"]
     time_points: list[str]
     measures: list[str]
 
@@ -83,16 +83,9 @@ BUILT_VERSIONS = {
     "microsoft_v7_1": BuiltVersion(
         provider="microsoft",
         version="v7_1",
-        time_points=['2020q2', '2024q2'],
-        measures=[
-            "density",
-            "height",
-        ],
-    ),
-    "microsoft_v7_e101": BuiltVersion(
-        provider="microsoft",
-        version="v7_e101",
-        time_points=['2023q4'],
+        time_points=[
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+        ][1:-2],
         measures=[
             "density",
             "height",

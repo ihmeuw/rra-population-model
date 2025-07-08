@@ -25,7 +25,8 @@ dependencies = [
     "scikit-image>=0.25.1",
     "pypdf>=3.9.0",
     "contextily>=1.6.2",
-
+    "xarray>=2025.7.0",
+    "netCDF4>=1.7.2",
 ]
 
 [project.urls]

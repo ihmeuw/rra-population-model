@@ -105,7 +105,6 @@ def rake(
     rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)
 
     time_points = clio.convert_choice(time_point, rf_time_points)
-    # time_points = sorted([time_point for time_point in time_points if time_point.startswith('202')])
 
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()

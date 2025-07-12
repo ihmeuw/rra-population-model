@@ -15,7 +15,6 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
 RAKING_VERSION = "gbd_2023"
-TO_RAKE = "raked"
 
 
 def load_admin_populations(
@@ -54,6 +53,7 @@ class AggregationArgs(NamedTuple):
     model_version: str
     block_key: str
     time_point: str
+    input_data: str
     shape_map: dict[int, shapely.Polygon]
     tile_poly: shapely.Polygon
 
@@ -62,16 +62,16 @@ def aggregate_unraked_population(
     aggregate_args: AggregationArgs,
 ) -> dict[int, float]:
     est_pop: dict[int, float] = {}
-    resolution, model_version, block_key, time_point, shape_map, *_ = aggregate_args
+    resolution, model_version, block_key, time_point, input_data, shape_map, *_ = aggregate_args
     if not shape_map:
         return est_pop
 
     pm_data = PopulationModelData()
     model_spec = pm_data.load_model_specification(resolution, model_version)
 
-    if TO_RAKE == 'raw':
+    if input_data == 'raw':
         r = pm_data.load_raw_prediction(block_key, time_point, model_spec)
-    elif TO_RAKE == 'raked':
+    elif input_data == 'raked':
         r = pm_data.load_raked_prediction(block_key, time_point, model_spec)
     for location_id, geom in shape_map.items():
         est_pop[location_id] = np.nansum(r.mask(geom))  # type: ignore[assignment]
@@ -82,6 +82,7 @@ def raking_factors_main(
     resolution: str,
     version: str,
     time_point: str,
+    input_data: str,
     output_dir: str,
     num_cores: int,
     progress_bar: bool,
@@ -116,6 +117,7 @@ def raking_factors_main(
                 version,
                 block_key,
                 prediction_time_point,
+                input_data,
                 shape_map,
                 tile_poly,
             )
@@ -171,6 +173,7 @@ def raking_factors_main(
 @clio.with_resolution()
 @clio.with_version()
 @clio.with_time_point(choices=None)
+@click.option("--input-data", type=str, required=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_progress_bar()
@@ -178,12 +181,13 @@ def raking_factors_task(
     resolution: str,
     version: str,
     time_point: str,
+    input_data: str,
     output_dir: str,
     num_cores: int,
     progress_bar: bool,
 ) -> None:
     raking_factors_main(
-        resolution, version, time_point, output_dir, num_cores, progress_bar
+        resolution, version, time_point, input_data, output_dir, num_cores, progress_bar
     )
 
 
@@ -193,6 +197,7 @@ def raking_factors_task(
 @clio.with_copy_from_version()
 @clio.with_time_point(choices=None, allow_all=True)
 @click.option("--extrapolate", is_flag=True)
+@click.option("--input-data", type=str, required=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_queue()
@@ -201,12 +206,19 @@ def raking_factors(
     version: str,
     copy_from_version: str | None,
     time_point: str,
+    input_data: str,
     extrapolate: bool,
     output_dir: str,
     num_cores: int,
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
+    if input_data == 'raw':
+        if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
+            raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
+    elif input_data != 'raked':
+        raise ValueError(f'Invalid `input_data` type: {input_data}')
+
     pm_data.maybe_copy_version(resolution, version, copy_from_version)
 
     prediction_time_points = pm_data.list_raw_prediction_time_points(
@@ -238,6 +250,7 @@ def raking_factors(
             "version": version,
             "resolution": resolution,
             "num-cores": num_cores,
+            "input-data": input_data,
             "output-dir": output_dir,
         },
         max_attempts=1,

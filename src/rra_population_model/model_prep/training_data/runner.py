@@ -223,31 +223,41 @@ def training_data(
 
     print("Building arg list")
     to_run = utils.build_arg_list(resolution, pm_data, purpose)
+    to_run = [i for i in to_run if i[1].startswith('202')]
 
-    print(f"Building test/train data for {len(to_run)} tiles.")
-    status = jobmon.run_parallel(
-        runner="pmtask model_prep",
-        task_name="training_data",
-        flat_node_args=(("tile-key", "time-point", "iso3-time-point-list"), to_run),
-        task_args={
-            "output-dir": output_dir,
-            "resolution": resolution,
-            "purpose": purpose,
-        },
-        task_resources={
-            "queue": queue,
-            "cores": 1,
-            "memory": "40G",
-            "runtime": "60m",
-            "project": "proj_rapidresponse",
-        },
-        max_attempts=5,
-        log_root=pm_data.log_dir("model_prep_training_data"),
-    )
+    time_points = sorted(list(set([i[1] for i in to_run])))
+    years = sorted(list(set([time_point.split('q')[0] for time_point in time_points])))
+    for year in years:
+        to_run_year = [i for i in to_run if i[1].startswith(year)]
+        print(f"Building {purpose} data for {len(to_run_year)} tiles for {year}.")
+        status = jobmon.run_parallel(
+            runner="pmtask model_prep",
+            task_name="training_data",
+            flat_node_args=(("tile-key", "time-point", "iso3-time-point-list"), to_run_year),
+            task_args={
+                "output-dir": output_dir,
+                "resolution": resolution,
+                "purpose": purpose,
+            },
+            task_resources={
+                "queue": queue,
+                "cores": 1,
+                "memory": "20G",
+                "runtime": "10m",
+                "project": "proj_rapidresponse",
+            },
+            max_attempts=4,
+            resource_scales={
+                "memory":  iter([40     , 80     , 200]),       # G
+                "runtime": iter([20 * 60, 30 * 60, 90 * 60]),  # seconds
+            },
+            log_root=pm_data.log_dir("model_prep_training_data"),
+        )
 
-    if status != "D":
-        msg = f"Workflow failed with status {status}."
-        raise RuntimeError(msg)
+        if status != "D":
+            msg = f"Workflow failed with status {status}."
+            raise RuntimeError(msg)
+        print("############################################################")
 
     if purpose == 'training':
         print("Building summary datasets.")

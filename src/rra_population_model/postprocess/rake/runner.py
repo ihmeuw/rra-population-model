@@ -10,12 +10,11 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
-TO_RAKE = 'raked'
-
 
 def rake_main(
     resolution: str,
     version: str,
+    input_data: str,
     block_key: str,
     time_point: str,
     output_dir: str,
@@ -28,11 +27,11 @@ def rake_main(
         pm_data, resolution, version, time_point
     )
     print("Loading unraked prediction")
-    if TO_RAKE == 'raw':
+    if input_data == 'raw':
         unraked_data = pm_data.load_raw_prediction(
             block_key, prediction_time_point, model_spec
         )
-    elif TO_RAKE == 'raked':
+    elif input_data == 'raked':
         unraked_data = pm_data.load_raked_prediction(
             block_key, prediction_time_point, model_spec
         )
@@ -75,7 +74,7 @@ def rake_main(
         )
         raked = unraked_data * raking_factor
 
-        if TO_RAKE == 'raw':
+        if input_data == 'raw':
             print("Loading inference data")
             model_frame = pm_data.load_modeling_frame(resolution)
             model_frame = model_frame.loc[model_frame['block_key'] == block_key]
@@ -156,33 +155,42 @@ def rake_main(
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
+@click.option("--input-data", type=str, required=True)
 @clio.with_block_key()
 @clio.with_time_point(choices=None)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def rake_task(
     resolution: str,
     version: str,
+    input_data: str,
     block_key: str,
     time_point: str,
     output_dir: str,
 ) -> None:
-    rake_main(resolution, version, block_key, time_point, output_dir)
+    rake_main(resolution, version, input_data, block_key, time_point, output_dir)
 
 
 @click.command()
 @clio.with_resolution(allow_all=False)
 @clio.with_version()
+@click.option("--input-data", type=str, required=True)
 @clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def rake(
     resolution: str,
     version: str,
+    input_data: str,
     time_point: str,
     output_dir: str,
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
+    if input_data == 'raw':
+        if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
+            raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
+    elif input_data != 'raked':
+        raise ValueError(f'Invalid `input_data` type: {input_data}')
 
     rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)
 
@@ -211,6 +219,7 @@ def rake(
             "version": version,
             "resolution": resolution,
             "output-dir": output_dir,
+            "input-data": input_data,
         },
         max_attempts=3,
         log_root=pm_data.log_dir("postprocess_rake"),

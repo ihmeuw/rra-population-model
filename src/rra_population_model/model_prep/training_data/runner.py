@@ -229,6 +229,8 @@ def training_data(
     years = sorted(list(set([time_point.split('q')[0] for time_point in time_points])))
     for year in years:
         to_run_year = [i for i in to_run if i[1].startswith(year)]
+        # year = '2023q1-2024q2'
+        # to_run_year = [i for i in to_run if i[1].startswith('2023') or i[1].startswith('2024')]
         print(f"Building {purpose} data for {len(to_run_year)} tiles for {year}.")
         status = jobmon.run_parallel(
             runner="pmtask model_prep",
@@ -242,14 +244,14 @@ def training_data(
             task_resources={
                 "queue": queue,
                 "cores": 1,
-                "memory": "20G",
-                "runtime": "10m",
+                "memory": "10G",
+                "runtime": "5m",
                 "project": "proj_rapidresponse",
             },
-            max_attempts=4,
+            max_attempts=5,
             resource_scales={
-                "memory":  iter([40     , 80     , 200]),       # G
-                "runtime": iter([20 * 60, 30 * 60, 90 * 60]),  # seconds
+                "memory":  iter([20     , 40     , 80     , 180    ]),  # G
+                "runtime": iter([10 * 60, 20 * 60, 30 * 60, 80 * 60]),  # seconds
             },
             log_root=pm_data.log_dir("model_prep_training_data"),
         )

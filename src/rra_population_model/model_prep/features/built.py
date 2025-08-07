@@ -263,16 +263,19 @@ def _generate_microsoft_derived_measures(
             "density": "microsoft_v6_density",
             "height": "ghsl_r2023a_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
         "microsoft_v7": {
             "density": "microsoft_v7_density",
             "height": "microsoft_v7_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
         "microsoft_v7_1": {
             "density": "microsoft_v7_1_density",
             "height": "microsoft_v7_1_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
     }[built_version_name]
     density = pm_data.load_feature(
@@ -289,15 +292,28 @@ def _generate_microsoft_derived_measures(
         **feature_metadata.shared_kwargs,
     )._ndarray
 
-    # Since we're crosswalking, ensure we have height wherever
-    # there is density, even if GHSL doesn't think there is density.
-    height_min = HEIGHT_MIN
-    if (height_arr > 0).any():
-        height_min = float(np.nanmin(height_arr[height_arr > 0]))
-    density_threshold = 0.01
-    density_is_positive = density_arr >= density_threshold
-    height_is_zero = height_arr == 0
-    height_arr[density_is_positive & height_is_zero] = height_min
+    # CROSSWALKING PROCEDURES
+    # 1) ensure we have height wherever there is density, even if GHSL doesn't think there is density
+    if feature_dict["density"].replace("_density", "") != feature_dict["height"].replace("_height", ""):
+        height_min = HEIGHT_MIN
+        if (height_arr > 0).any():
+            height_min = float(np.nanmin(height_arr[height_arr > 0]))
+        density_threshold = 0.01
+        density_is_positive = density_arr >= density_threshold
+        height_is_zero = height_arr == 0
+        height_arr[density_is_positive & height_is_zero] = height_min
+
+    # 2) if Microsoft places buildings somewhere GHSL does not, call them residential
+    if "reference_density" in feature_dict.keys():
+        reference_density_arr = pm_data.load_feature(
+            feature_name=feature_dict["reference_density"],
+            **feature_metadata.shared_kwargs,
+        )._ndarray
+        density_threshold = 0.01
+        density_is_positive = density_arr >= density_threshold
+        reference_density_is_zero = reference_density_arr < density_threshold
+        residential_is_zero = p_residential_arr == 0
+        p_residential_arr[density_is_positive & reference_density_is_zero & residential_is_zero] = 1
 
     out_ops = {
         "density": lambda d, _, __: d,

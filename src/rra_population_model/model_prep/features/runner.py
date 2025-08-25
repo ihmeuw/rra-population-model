@@ -18,8 +18,8 @@ from rra_population_model.model_prep.features.ntl import process_ntl
 # GHSL first, as we need the residential mask for msft
 BUILT_VERSIONS = [
     pmc.BUILT_VERSIONS["ghsl_r2023a"],
-    pmc.BUILT_VERSIONS["microsoft_v6"],
-    pmc.BUILT_VERSIONS["microsoft_v7"],
+    # pmc.BUILT_VERSIONS["microsoft_v6"],
+    # pmc.BUILT_VERSIONS["microsoft_v7"],
     pmc.BUILT_VERSIONS["microsoft_v7_1"],
 ]
 
@@ -174,8 +174,8 @@ def features(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "5G",
-            "runtime": "10m",
+            "memory": "6G",
+            "runtime": "6m",
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },

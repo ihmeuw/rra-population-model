@@ -174,8 +174,8 @@ def features(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "5G",
-            "runtime": "10m",
+            "memory": "6G",
+            "runtime": "6m",
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },

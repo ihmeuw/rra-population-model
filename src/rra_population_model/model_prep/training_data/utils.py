@@ -1,6 +1,4 @@
-from collections import defaultdict
-from typing import Any, List
-import itertools
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -19,7 +17,7 @@ from rra_population_model.model_prep.training_data.metadata import (
 
 def get_intersecting_admins(
     tile_meta: TileMetadata,
-    iso3_time_point_list: List[str],
+    iso3_time_point_list: list[list[str]],
     pm_data: PopulationModelData,
 ) -> gpd.GeoDataFrame:
     admin_data = []

@@ -147,6 +147,9 @@ def rake_main(
                 )
             else:
                 print("No population to splice")
+        elif input_data != 'raked':
+            raise ValueError(f'Invalid `input_data` type: {input_data}')
+
 
     print("Saving raked prediction")
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)

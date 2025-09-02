@@ -162,9 +162,7 @@ def upsample(
     compiled_time_points = pm_data.list_compiled_prediction_time_points(
         resolution, version
     )
-    # compiled_time_points = [f"{y}q1" for y in range(1950, 1976)]
     time_points = clio.convert_choice(time_point, compiled_time_points)
-    # time_points = [time_point for time_point in time_points if time_point.startswith('202')]
 
     print("Upsampling")
 

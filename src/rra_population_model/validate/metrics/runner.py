@@ -179,9 +179,10 @@ def metrics(
         },
         node_args={
             "block-key": block_keys,
-            "version": [f"2025_06_21.00{i}" for i in range(1, 5)],
+            # "version": ["2025_06_30.002", "2025_07_01.001"],  # [f"2025_06_21.00{i}" for i in range(1, 5)],
         },
         task_args={
+            "version": version,
             "resolution": resolution,
             "output-dir": output_dir,
             "time-point": time_point,

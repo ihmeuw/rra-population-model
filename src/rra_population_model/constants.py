@@ -61,25 +61,25 @@ BUILT_VERSIONS = {
             "nonresidential_volume",
         ],
     ),
-    "microsoft_v6": BuiltVersion(
-        provider="microsoft",
-        version="v6",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
-        ][1:],
-        measures=["density"],
-    ),
-    "microsoft_v7": BuiltVersion(
-        provider="microsoft",
-        version="v7",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
-        ][1:],
-        measures=[
-            "density",
-            "height",
-        ],
-    ),
+    # "microsoft_v6": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v6",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
+    #     ][1:],
+    #     measures=["density"],
+    # ),
+    # "microsoft_v7": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
+    #     ][1:],
+    #     measures=[
+    #         "density",
+    #         "height",
+    #     ],
+    # ),
     "microsoft_v7_1": BuiltVersion(
         provider="microsoft",
         version="v7_1",
@@ -98,11 +98,15 @@ for built_version in BUILT_VERSIONS.values():
     for denominator in [
         "density",
         "volume",
-        "residential_density",
+        # "residential_density",
         "residential_volume",
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
+DATA_PURPOSES = [
+    'training',
+    'inference',
+]
 
 FEATURE_AVERAGE_RADII = [
     100,
@@ -112,6 +116,11 @@ FEATURE_AVERAGE_RADII = [
     5000,
     10000,
 ]
+
+BUILT_VERSION_TIME_POINTS = sorted(
+    set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
+)
+
 
 ALL_TIME_POINTS = sorted(
     set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])

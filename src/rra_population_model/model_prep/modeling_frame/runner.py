@@ -35,7 +35,7 @@ def modeling_frame_main(
         modeling_frame[["block_key", "geometry"]].dissolve("block_key").reset_index()
     )
     validation_rows = []
-    for iso3, year in pm_data.list_census_data():
+    for iso3, year, quarter in pm_data.list_census_data():
         gdf = pm_data.load_census_data(iso3, year, admin_level=0)
         intersection_frame = block_frame[
             block_frame.intersects(gdf.explode().convex_hull.union_all())

@@ -311,13 +311,14 @@ class PopulationModelData:
     def census_path(self, iso3: str, year: str) -> Path:
         return self.census / f"{iso3}_{year}.parquet"
 
-    def list_census_data(self) -> list[tuple[str, str]]:
+    def list_census_data(self) -> list[tuple[str, str, str]]:
         census_data = []
         for path in self.census.glob("*.parquet"):
             # Some iso3 codes have underscores (e.g. GBR subnats)
             *iso3_parts, year = path.stem.split("_")
             iso3 = "_".join(iso3_parts)
-            census_data.append((iso3, year))
+            quarter = '1'
+            census_data.append((iso3, year, quarter))
         return census_data
 
     def save_census_data(self, gdf: gpd.GeoDataFrame, iso3: str, year: str) -> None:
@@ -573,6 +574,27 @@ class PopulationModelData:
         touch(path, clobber=True)
         data.to_parquet(path)
 
+    def inference_data_root(self, resolution: str) -> Path:
+        return self.resolution_root(resolution) / "inference-data"
+
+    def tile_inference_data_root(self, resolution: str) -> Path:
+        return self.inference_data_root(resolution) / "tiles"
+
+    def save_tile_inference_data(
+        self,
+        resolution: str,
+        time_point: str,
+        tile_key: str,
+        tile_rasters: dict[str, rt.RasterArray],
+    ) -> None:
+        root = self.tile_inference_data_root(resolution) / time_point / tile_key
+        mkdir(root, exist_ok=True, parents=True)
+
+        for measure, raster in tile_rasters.items():
+            raster_path = root / f"{measure}.tif"
+            touch(raster_path, clobber=True)
+            save_raster(raster, raster_path)
+
     def load_people_per_structure(
         self, resolution: str, tile_key: str | None = None
     ) -> gpd.GeoDataFrame:
@@ -606,6 +628,19 @@ class PopulationModelData:
     ) -> rt.RasterArray:
         path = self.tile_training_data_root(resolution) / tile_key / f"{measure}.tif"
         return rt.load_raster(path)
+
+    def load_tile_inference_data(
+        self,
+        resolution: str,
+        tile_key: str,
+        time_point: str,
+        measure: str,
+    ) -> rt.RasterArray:
+        path = self.tile_inference_data_root(resolution) / time_point / tile_key / f"{measure}.tif"
+        if path.exists():
+            return rt.load_raster(path)
+        else:
+            return None
 
     def model_root(self, resolution: str) -> Path:
         return self.resolution_root(resolution) / "models"

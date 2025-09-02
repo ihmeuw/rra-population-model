@@ -1,4 +1,3 @@
-from collections import defaultdict
 from typing import Any
 
 import geopandas as gpd
@@ -8,6 +7,7 @@ import pandas as pd
 import rasterra as rt
 import tqdm
 
+from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.model_prep.training_data.metadata import (
     TileMetadata,
@@ -17,20 +17,19 @@ from rra_population_model.model_prep.training_data.metadata import (
 
 def get_intersecting_admins(
     tile_meta: TileMetadata,
-    iso3_list: str,
-    time_point: str,
+    iso3_time_point_list: list[list[str]],
     pm_data: PopulationModelData,
 ) -> gpd.GeoDataFrame:
-    year = time_point.split("q")[0]
-
     admin_data = []
-    for iso in iso3_list.split(","):
-        a = pm_data.load_census_data(iso, year, tile_meta.polygon)
+    for iso3, time_point in iso3_time_point_list:
+        year = time_point.split("q")[0]
+        a = pm_data.load_census_data(iso3, year, tile_meta.polygon)
         # Need to intersect again with the tile poly because we load based on the
         # intersection with the bounding box.
         is_max_admin = a.admin_level == a.admin_level.max()
         intersects_tile = a.intersects(tile_meta.polygon)
         a = a.loc[is_max_admin & intersects_tile]
+        a['census_time_point'] = time_point
         admin_data.append(a)
 
     admins = pd.concat(admin_data, ignore_index=True)
@@ -42,30 +41,50 @@ def get_intersecting_admins(
     )
     admins["admin_area"] = admins.area
     admins["geometry"] = admins.buffer(0)
-    return admins.loc[:, ["admin_id", "admin_population", "admin_area", "geometry"]]
+    return admins.loc[:, ["admin_id", "admin_population", "admin_area", "geometry", "census_time_point"]]
 
 
-def get_training_locations_and_years(
+def get_data_locations_and_years(
     pm_data: PopulationModelData,
+    purpose: str,
 ) -> list[tuple[str, str, str]]:
     """Get the locations and years for which we have training data."""
-    available_census_years = pm_data.list_census_data()  # noqa: F841
-    return [
-        ("MEX", "2020", "1"),
-        ("USA", "2020", "1"),
-    ]
+    available_census_years = pm_data.list_census_data()
+    if purpose == 'training':
+        available_census_years = [
+            i for i in available_census_years
+            if i[0] in ["MEX", "USA"] and i[1] == "2020"
+        ]
+    elif purpose == 'inference':
+        inference_countries = [
+            # "DNK",  # Denmark
+            # "FIN",  # Finland
+            # "FRA",  # France
+            "MEX",  # Mexico
+            # "MYS",  # Malaysia
+            # "PAN",  # Panama
+            # "SWE",  # Sweden
+            # "TUR",  # Turkey
+            "USA",  # United States
+        ]
+        available_census_years = [
+            i for i in available_census_years
+            if i[0] in inference_countries and i[1] == "2020"
+        ]
+    return available_census_years
 
 
 def build_arg_list(
     resolution: str,
     pm_data: PopulationModelData,
+    purpose: str,
     buffer_size: int | float = 5000,
 ) -> list[tuple[str, str, str]]:
     modeling_frame = pm_data.load_modeling_frame(resolution)
-    training_census_years = get_training_locations_and_years(pm_data)
+    data_years = get_data_locations_and_years(pm_data, purpose)
 
-    tile_keys_and_times = defaultdict(list)
-    for iso3, year, quarter in training_census_years:
+    tile_keys_and_times = []
+    for iso3, year, quarter in data_years:
         print(f"Processing {iso3} {year}q{quarter}")
         shape = pm_data.load_census_data(iso3, year)
         a1 = (
@@ -76,11 +95,55 @@ def build_arg_list(
         )
         a1_intersection = modeling_frame[modeling_frame.intersects(a1)]
         for tile_key in a1_intersection.tile_key.unique():
-            tile_keys_and_times[(tile_key, f"{year}q{quarter}")].append(iso3)
+            tile_keys_and_times.append(
+                pd.DataFrame(
+                    {"iso3_time_point": f"{year}q{quarter}", "iso3": iso3},
+                    index=pd.Index([tile_key], name='tile_key'),
+                )
+            )
+    tile_keys_and_times = pd.concat(tile_keys_and_times)
+    if purpose == 'training':
+        tile_keys_and_times['time_point'] = tile_keys_and_times['iso3_time_point']
+    elif purpose == 'inference':
+        tile_keys_and_times = pd.concat(
+            [
+                pd.concat([
+                    tile_keys_and_times, pd.Series(time_point, name='time_point', index=tile_keys_and_times.index)
+                ], axis=1)
+                for time_point in pmc.BUILT_VERSION_TIME_POINTS
+            ]
+        )
+        tile_keys_and_times['year'] = (
+            tile_keys_and_times['time_point'].str.split('q').str[0].astype(int)
+            + (tile_keys_and_times['time_point'].str.split('q').str[1].astype(int) - 1) / 4
+        )
+        tile_keys_and_times['iso3_year'] = (
+            tile_keys_and_times['iso3_time_point'].str.split('q').str[0].astype(int)
+            + (tile_keys_and_times['iso3_time_point'].str.split('q').str[1].astype(int) - 1) / 4
+        )
+        tile_keys_and_times['distance'] = (tile_keys_and_times['year'] - tile_keys_and_times['iso3_year']).abs()
+        tile_keys_and_times = (
+            tile_keys_and_times
+            .sort_values('distance')
+            .groupby(['tile_key', 'time_point', 'iso3'])['iso3_time_point']
+            .first()
+            .reset_index(['time_point', 'iso3'])
+        )
+    else:
+        raise ValueError(f'Unexpected purpose: {purpose}')
+    tile_keys_and_times['iso3_time_point'] = (
+        tile_keys_and_times['iso3'] + ':' + tile_keys_and_times['iso3_time_point']
+    )
+    tile_keys_and_times = (
+        tile_keys_and_times
+        .groupby(['tile_key', 'time_point'])['iso3_time_point']
+        .apply(lambda x: ','.join(x.to_list()))
+        .sort_index()
+    )
 
     to_run = [
-        (tile_key, time_point, ",".join(iso3s))
-        for (tile_key, time_point), iso3s in tile_keys_and_times.items()
+        (tile_key, time_point, iso3_time_points)
+        for (tile_key, time_point), iso3_time_points in tile_keys_and_times.items()
     ]
     return to_run
 
@@ -123,20 +186,18 @@ def get_tile_feature_gdf(
     tile_meta: TileMetadata,
     training_meta: TrainingMetadata,
     pm_data: PopulationModelData,
+    time_point: str,
 ) -> gpd.GeoDataFrame:
     """Load the raster features for the tile and convert to a GeoDataFrame."""
-    kwargs = {
-        "resolution": training_meta.resolution,
-        "block_key": tile_meta.block_key,
-        "time_point": training_meta.time_point,
-    }
 
     tile_features = {}
     for feature_name in training_meta.features:
         tile_features[feature_name] = pm_data.load_feature(
+            resolution=training_meta.resolution,
+            block_key=tile_meta.block_key,
             feature_name=feature_name,
+            time_point=time_point,
             subset_bounds=tile_meta.polygon,
-            **kwargs,
         )
 
     default_raster = training_meta.denominators[0]
@@ -150,7 +211,7 @@ def get_tile_feature_gdf(
     feature_gdf["pixel_area"] = feature_gdf.area
     feature_gdf["block_key"] = tile_meta.block_key
     feature_gdf["tile_key"] = tile_meta.key
-    feature_gdf["time_point"] = training_meta.time_point
+    feature_gdf["time_point"] = time_point
 
     for feature_name, feature_raster in tile_features.items():
         feature_gdf[f"pixel_{feature_name}"] = feature_raster.to_numpy().flatten()
@@ -225,10 +286,12 @@ def process_model_gdf(
         denominator_df["admin_built"] = denominator_df.groupby("admin_id")[
             "isection_built"
         ].transform("sum")
-        if denominator[:4] == "msft":
-            low_density = denominator_df["admin_built"] < min_admin_density
-            denominator_df.loc[low_density, "admin_built"] = 0.0
-            denominator_df.loc[low_density, "isection_built"] = 0.0
+        # if denominator.startswith("microsoft"):
+        #     low_density = denominator_df["admin_built"] < min_admin_density
+        #     denominator_df.loc[low_density, "admin_built"] = 0.0
+        #     denominator_df.loc[low_density, "isection_built"] = 0.0
+        # elif not denominator.startswith("ghsl"):
+        #     raise ValueError(f"Unexpected denominator: {denominator}")
 
         denominator_df[f"admin_{denominator}"] = safe_divide(
             denominator_df["admin_built"], model_gdf["admin_area"]
@@ -280,6 +343,8 @@ def process_model_gdf(
             "admin_built",
             "admin_occupancy_rate",
             "admin_log_occupancy_rate",
+            "pixel_built",
+            "pixel_built_weight",
             "pixel_population",
             "pixel_occupancy_rate",
             "pixel_log_occupancy_rate",

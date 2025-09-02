@@ -146,7 +146,7 @@ def rake_itu_main(
         pred_total = np.nansum(prediction_array[block_mask])
         raking_factor[block_mask] = location_pop / pred_total
 
-    raked_arr = prediction_array * raking_factor
+    raked_arr = prediction_array * raking_factor  # type: ignore[operator]
     raked_arr[location_mask == 0] = np.nan
 
     raked_pop = rt.RasterArray(

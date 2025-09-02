@@ -100,8 +100,8 @@ def make_tile_diagnostics(tile_key: str) -> None:
 
 
 def hist_eq_plot(
-    x: np.ndarray,
-    y: np.ndarray,
+    x: np.ndarray,  # type: ignore[type-arg]
+    y: np.ndarray,  # type: ignore[type-arg]
     ax: Axes,
 ) -> None:
     bins = 256

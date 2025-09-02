@@ -55,7 +55,7 @@ def load_gbd_populations(location_set_id: int, release_id: int) -> pd.DataFrame:
 
 def load_fhs_population(*args: Any, **kwargs: Any) -> pd.DataFrame:
     pop_fhs_path = f"/mnt/share/forecasting/data/{FHS_RELEASE_ID}/future/population/20250219_draining_fix_old_pop_v5/summary/summary.nc"
-    return (  # type: ignore[no-any-return]
+    return (
         xr.open_dataset(pop_fhs_path)
         .sel(scenario=0, statistic="mean", sex_id=3, age_group_id=22)
         .to_dataframe()

@@ -133,7 +133,9 @@ class ProcessStrategy(ProcessingStrategy):
             # No derived measures for GHSL
             return {}
         elif self.built_version.name.startswith("microsoft"):
-            return _generate_microsoft_derived_measures(pm_data, self.feature_metadata, self.built_version.name)
+            return _generate_microsoft_derived_measures(
+                pm_data, self.feature_metadata, self.built_version.name
+            )
         else:
             msg = f"Unknown built version: {self.built_version.name}"
             raise ValueError(msg)

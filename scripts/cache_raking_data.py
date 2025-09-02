@@ -24,8 +24,9 @@ from db_queries.api.internal import (  # type: ignore[import-not-found]
 )
 from rra_tools.shell_tools import mkdir, touch
 
-GBD_RELEASE_ID = 9
+GBD2021_RELEASE_ID = 9
 GBD2023_RELEASE_ID = 16
+GBD2025_RELEASE_ID = 34
 FHS_RELEASE_ID = 9
 GBD_LOCATION_SET_ID = 22
 FHS_LOCATION_SET_ID = 39
@@ -54,7 +55,7 @@ def load_gbd_populations(location_set_id: int, release_id: int) -> pd.DataFrame:
 
 def load_fhs_population(*args: Any, **kwargs: Any) -> pd.DataFrame:
     pop_fhs_path = f"/mnt/share/forecasting/data/{FHS_RELEASE_ID}/future/population/20250219_draining_fix_old_pop_v5/summary/summary.nc"
-    return (  # type: ignore[no-any-return]
+    return (
         xr.open_dataset(pop_fhs_path)
         .sel(scenario=0, statistic="mean", sex_id=3, age_group_id=22)
         .to_dataframe()
@@ -138,8 +139,9 @@ def cache_raking_data(model_root: str) -> None:
         wpp.to_parquet(out_path)
 
     hierarchy_specs = {
-        "gbd_2021": (GBD_LOCATION_SET_ID, GBD_RELEASE_ID),
+        "gbd_2021": (GBD_LOCATION_SET_ID, GBD2021_RELEASE_ID),
         "gbd_2023": (GBD_LOCATION_SET_ID, GBD2023_RELEASE_ID),
+        "gbd_2025": (GBD_LOCATION_SET_ID, GBD2025_RELEASE_ID),
         "fhs_2021": (FHS_LOCATION_SET_ID, FHS_RELEASE_ID),
     }
     for name, (location_set_id, release_id) in hierarchy_specs.items():
@@ -163,8 +165,9 @@ def cache_raking_data(model_root: str) -> None:
         h.to_parquet(out_path)
 
     pop_loaders = {
-        "gbd_2021": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD_RELEASE_ID)),
+        "gbd_2021": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD2021_RELEASE_ID)),
         "gbd_2023": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD2023_RELEASE_ID)),
+        "gbd_2025": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD2025_RELEASE_ID)),
         "fhs_2021": (load_fhs_population, ()),
     }
     for name, (loader, args) in pop_loaders.items():
@@ -175,15 +178,19 @@ def cache_raking_data(model_root: str) -> None:
         pop.to_parquet(out_path)
 
     gbd_2021_shape_path = Path(
-        "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2021/master/shapefiles/GBD2021_analysis_final_loc_set_22.shp"
+        f"/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2021/master/shapefiles/GBD2021_analysis_final_loc_set_{GBD_LOCATION_SET_ID}.shp"
     )
     gbd_2023_shape_path = Path(
-        "/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2023/master/shapefiles/GBD2023_analysis_final_loc_set_22.shp"
+        f"/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2023/master/shapefiles/GBD2023_analysis_final_loc_set_{GBD_LOCATION_SET_ID}.shp"
+    )
+    gbd_2025_shape_path = Path(
+        f"/home/j/DATA/SHAPE_FILES/GBD_geographies/master/GBD_2025/master/shapefiles/GBD2025_analysis_final_loc_set_{GBD_LOCATION_SET_ID}.shp"
     )
     lsae_shape_root = Path("/home/j/WORK/11_geospatial/admin_shapefiles/")
     shape_loaders = {
         "gbd_2021": (load_gbd_shapes, gbd_2021_shape_path),
         "gbd_2023": (load_gbd_shapes, gbd_2023_shape_path),
+        "gbd_2025": (load_gbd_shapes, gbd_2025_shape_path),
         "lsae_1209_a0": (
             load_lsae_shapes,
             lsae_shape_root / "2023_10_30" / "lbd_standard_admin_0.shp",

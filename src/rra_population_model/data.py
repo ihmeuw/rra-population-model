@@ -153,14 +153,14 @@ class RRAPopulationData:
         iso3: str,
         year: str | int,
         state: str | None = None,
-        purpose: str = 'training',
+        purpose: str = "training",
     ) -> Path:
         shapefile_dir = self.shapefiles / purpose / iso3 / str(year)
         if state:
             return shapefile_dir / state
         return shapefile_dir
 
-    def list_shapefile_years(self, purpose: str = 'training') -> list[tuple[str, str]]:
+    def list_shapefile_years(self, purpose: str = "training") -> list[tuple[str, str]]:
         """List all available shapefile years by country."""
         return self._list_years(self.shapefiles / purpose)
 
@@ -170,7 +170,7 @@ class RRAPopulationData:
         iso3: str,
         year: str | int,
         state: str | None = None,
-        purpose: str = 'training',
+        purpose: str = "training",
     ) -> gpd.GeoDataFrame:
         """Load administrative boundary data from a shapefile.
 
@@ -197,7 +197,9 @@ class RRAPopulationData:
         gdf = gpd.read_parquet(path)
         return gdf
 
-    def list_admin_levels(self, iso3: str, year: str | int, purpose: str = 'training') -> list[int]:
+    def list_admin_levels(
+        self, iso3: str, year: str | int, purpose: str = "training"
+    ) -> list[int]:
         """List all available administrative levels for a country and year."""
         shapefile_dir = self.get_shapefile_dir(iso3, year, purpose=purpose)
         admin_levels = [
@@ -333,9 +335,9 @@ class PopulationModelData:
     ) -> gpd.GeoDataFrame:
         bbox = bounds_to_bbox(bounds)
         path = self.census_path(iso3, year)
-        kwargs = {'bbox':bbox}
+        kwargs = {"bbox": bbox}
         if admin_level is not None:
-            kwargs['filters'] = [("admin_level", "==", admin_level)]
+            kwargs["filters"] = [("admin_level", "==", admin_level)]  # type: ignore[assignment]
 
         return gpd.read_parquet(path, **kwargs)
 

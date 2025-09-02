@@ -84,4 +84,4 @@ venv.bak/
 # Jupyter scratch space
 /notebooks
 
-core
+*core

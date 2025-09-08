@@ -14,7 +14,7 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
-RAKING_VERSION = "gbd_2023"
+RAKING_VERSION = "gbd_2025"
 
 
 def load_admin_populations(
@@ -31,6 +31,8 @@ def load_admin_populations(
         year, quarter = (int(s) for s in time_point.split("q"))
         if RAKING_VERSION == "gbd_2023":
             next_year = min(year + 1, 2024)
+        elif RAKING_VERSION == "gbd_2025":
+            next_year = min(year + 1, 2026)
         else:
             next_year = min(year + 1, 2100)
         weight = (int(quarter) - 1) / 4

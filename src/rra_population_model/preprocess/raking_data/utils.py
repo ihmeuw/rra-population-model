@@ -18,7 +18,7 @@ from rra_population_model.preprocess.raking_data.metadata import (
 
 
 def load_wpp_populations(
-    pm_data: PopulationModelData, wpp_version: str
+    pm_data: PopulationModelData, wpp_version: str, gbd_version: str
 ) -> pd.DataFrame:
     if wpp_version in ["2022", "2024"]:
         wpp = pm_data.load_gbd_raking_input("population", f"wpp_{wpp_version}")
@@ -29,6 +29,18 @@ def load_wpp_populations(
             # GBD treats Kosovo as part of Serbia at the admin0 level
             "SRB": ["SRB", "XKX"],
         }
+        if gbd_version == "2025":
+            # Starting in 2025, GBD separates Metropolitan France and overseas departments (DROM-COMs)
+            merge_map.update(
+                {
+                    "FRA_97896": ["FRA"],  # Metropolitan France
+                    "FRA_338":   ["GUF"],  # French Guiana
+                    "FRA_350":   ["GLP"],  # Guadeloupe
+                    "FRA_363":   ["MTQ"],  # Martinique
+                    "FRA_364":   ["MYT"],  # Mayotte
+                    "FRA_387":   ["REU"],  # Reunion Island
+                }
+            )
         for target, sources in merge_map.items():
             mask = wpp["iso3"].isin(sources)
             merged = (

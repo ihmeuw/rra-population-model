@@ -34,11 +34,11 @@ def load_wpp_populations(
             merge_map.update(
                 {
                     "FRA_97896": ["FRA"],  # Metropolitan France
-                    "FRA_338":   ["GUF"],  # French Guiana
-                    "FRA_350":   ["GLP"],  # Guadeloupe
-                    "FRA_363":   ["MTQ"],  # Martinique
-                    "FRA_364":   ["MYT"],  # Mayotte
-                    "FRA_387":   ["REU"],  # Reunion Island
+                    "FRA_338": ["GUF"],  # French Guiana
+                    "FRA_350": ["GLP"],  # Guadeloupe
+                    "FRA_363": ["MTQ"],  # Martinique
+                    "FRA_364": ["MYT"],  # Mayotte
+                    "FRA_387": ["REU"],  # Reunion Island
                 }
             )
         for target, sources in merge_map.items():

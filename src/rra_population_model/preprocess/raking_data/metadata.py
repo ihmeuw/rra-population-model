@@ -348,7 +348,7 @@ def load_supplmental_metadata(gbd_version: str) -> pd.DataFrame:
 
     if gbd_version == "2025":
         # added French data in GBD 2025
-        is_fra_admin0 = supplmental_metadata['location_id'].isin(
+        is_fra_admin0 = supplmental_metadata["location_id"].isin(
             [
                 338,  # French Guiana
                 350,  # Guadaloupe
@@ -357,6 +357,8 @@ def load_supplmental_metadata(gbd_version: str) -> pd.DataFrame:
                 387,  # Reunion
             ]
         )
-        supplmental_metadata = supplmental_metadata.loc[~is_fra_admin0].reset_index(drop=True)
+        supplmental_metadata = supplmental_metadata.loc[~is_fra_admin0].reset_index(
+            drop=True
+        )
 
     return supplmental_metadata

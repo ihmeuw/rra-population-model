@@ -14,7 +14,7 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
-RAKING_VERSION = "gbd_2025"
+RAKING_VERSION = "gbd_2023"
 
 
 def load_admin_populations(

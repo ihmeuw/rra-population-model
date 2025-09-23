@@ -404,10 +404,23 @@ def raster_from_pixel_feature(
     rt.RasterArray
         The raster of the pixel feature.
     """
+    if feature_name.startswith("population") or feature_name == "area_weight":
+        agg_func = "sum"
+    elif (
+        feature_name.startswith("occupancy_rate")
+        or feature_name.startswith("log_occupancy_rate")
+    ):
+        agg_func = "mean"
+    elif feature_name == "multi_tile":
+        agg_func = "first"
+    else:
+        value_error = f"Unexpected feature name: {feature_name}"
+        raise ValueError(value_error)
+
     idx = np.arange(raster_template.size)
     feature_data = (
         tile_gdf.groupby("pixel_id")[f"pixel_{feature_name}"]
-        .first()
+        .agg(agg_func)
         .reindex(idx, fill_value=0.0)
         .to_numpy()
         .astype(np.float32)

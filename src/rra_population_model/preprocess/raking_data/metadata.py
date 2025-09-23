@@ -92,8 +92,8 @@ class SUPPLEMENT:
     ZERO_POPULATION = "zero_population"
 
 
-def load_supplmental_metadata() -> pd.DataFrame:
-    return pd.DataFrame(
+def load_supplmental_metadata(gbd_version: str) -> pd.DataFrame:
+    supplmental_metadata = pd.DataFrame(
         [
             # This is a manual mapping of locations not present in the GBD hierarchy to the
             # GBD region in which they reside. We grab the additional iso3 and location name
@@ -345,3 +345,20 @@ def load_supplmental_metadata() -> pd.DataFrame:
             "category",
         ],
     )
+
+    if gbd_version == "2025":
+        # added French data in GBD 2025
+        is_fra_admin0 = supplmental_metadata["location_id"].isin(
+            [
+                338,  # French Guiana
+                350,  # Guadaloupe
+                363,  # Martinique
+                364,  # Mayotte
+                387,  # Reunion
+            ]
+        )
+        supplmental_metadata = supplmental_metadata.loc[~is_fra_admin0].reset_index(
+            drop=True
+        )
+
+    return supplmental_metadata

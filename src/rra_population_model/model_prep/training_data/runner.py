@@ -226,6 +226,8 @@ def training_data(
 
     time_points = sorted(list(set([i[1] for i in to_run])))
     years = sorted(list(set([time_point.split('q')[0] for time_point in time_points])))
+    print(f"Starting annual workflows for each year: {', '.join(years)}")
+    print("############################################################")
     for year in years:
         to_run_year = [i for i in to_run if i[1].startswith(year)]
         # year = '2023q1-2024q2'

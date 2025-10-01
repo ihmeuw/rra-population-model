@@ -4,6 +4,8 @@ import rasterra as rt
 from rasterra._features import raster_geometry_mask
 from rra_tools import jobmon
 import tqdm
+import geopandas as gpd
+import shapely
 
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
@@ -74,13 +76,14 @@ def rake_main(
         )
         raked = unraked_data * raking_factor
 
-        if input_data == 'raw':
+        if input_data == "raw":
             print("Loading inference data")
             model_frame = pm_data.load_modeling_frame(resolution)
             model_frame = model_frame.loc[model_frame['block_key'] == block_key]
+
             census_population = []
             census_weight = []
-            for tile_key in tqdm.tqdm(model_frame['tile_key'].to_list()):
+            for tile_key in tqdm.tqdm(model_frame["tile_key"].to_list()):
                 tile_census_population = pm_data.load_tile_inference_data(
                     resolution,
                     tile_key,
@@ -117,8 +120,21 @@ def rake_main(
                 census_population.append(tile_census_population)
                 census_weight.append(tile_census_weight)
 
+            census_weight = rt.merge(census_weight)
             census_population = rt.merge(census_population)
-            if np.nansum(census_population) > 0 and np.nansum(raked) > 0:
+            if np.nansum(census_weight) > 0:
+                if (np.round(census_weight.bounds, 2) != np.round(raked.bounds, 2)).any():
+                    census_bounds = create_bounds_polygon(census_weight)
+                    raked_bounds = create_bounds_polygon(raked)
+
+                    missing = raked_bounds.difference(census_bounds, grid_size=int(resolution))
+                    missing = raked.clip(missing).mask(missing)
+
+                    census_weight = rt.merge([census_weight, missing])
+                    census_population = rt.merge([census_population, missing])
+                    if (np.round(census_weight.bounds, 2) != np.round(raked.bounds, 2)).any():
+                        raise ValueError('Still incompatible after attaching missing pixels')
+
                 array = census_population.to_numpy()
                 nan_mask = np.isnan(array)
                 array[nan_mask] = 0
@@ -129,7 +145,6 @@ def rake_main(
                     no_data_value=np.nan,
                 )
 
-                census_weight = rt.merge(census_weight)
                 array = census_weight.to_numpy()
                 nan_mask = np.isnan(array)
                 array[nan_mask] = 0
@@ -150,9 +165,26 @@ def rake_main(
         elif input_data != 'raked':
             raise ValueError(f'Invalid `input_data` type: {input_data}')
 
-
     print("Saving raked prediction")
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)
+
+
+def create_bounds_polygon(raster_data: rt.RasterArray) -> shapely.Polygon:
+    bounds = raster_data.bounds
+    bounds = (
+        bounds[0], bounds[2],
+        bounds[1], bounds[3],
+    )
+    bounds = (
+        gpd.GeoSeries(
+            [shapely.box(*bounds)],
+            crs=raster_data.crs
+        )
+        .explode(index_parts=True)
+        .union_all()
+    )
+
+    return bounds
 
 
 @click.command()

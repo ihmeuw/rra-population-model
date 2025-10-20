@@ -1,25 +1,21 @@
-from pathlib import Path
-from typing import Any, cast, Tuple, Union
+from typing import Any, cast
 
 import geopandas as gpd
 import numpy as np
 import rasterio
-from typing import cast
-
+import rasterra as rt
 from affine import Affine
 from geopandas import GeoDataFrame
 from numpy.typing import NDArray
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, gaussian_filter
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
-from rra_population_model.model_prep.features.metadata import FeatureMetadata
-from rra_population_model.data import PopulationModelData
+
 from rra_population_model import constants as pmc
+from rra_population_model.data import PopulationModelData
+from rra_population_model.model_prep.features.metadata import FeatureMetadata
 
-import rasterra as rt
-from scipy.ndimage import distance_transform_edt, gaussian_filter
-
-# ADD OVERTURE YEAR 
+# ADD OVERTURE YEAR
 TIME_POINT_OVERTURE = "2020q2"
 
 
@@ -46,6 +42,7 @@ def read_and_clip_vector(
 
     return gdf
 
+
 def expand_tile_bounding_box(
     model_frame: gpd.GeoDataFrame,
     block_key: str,
@@ -55,7 +52,7 @@ def expand_tile_bounding_box(
     Expand block frame to include neighboring blocks in order to capture features that may be near the edges.
     """
     block = model_frame[model_frame["block_key"] == block_key]
-    block = block.to_crs("EPSG:4326") # Match shapefile CRS
+    block = block.to_crs("EPSG:4326")  # Match shapefile CRS
 
     minx, miny, maxx, maxy = block.total_bounds
     height_exp = (maxy - miny) * expansion_factor
@@ -132,7 +129,7 @@ def rasterize(
 def compute_feature_array(
     rasterized: np.ndarray[tuple[Any, ...], Any],
     mode: str,
-    original_shape: Tuple[int, int],
+    original_shape: tuple[int, int],
     transform: Affine,
     bandwidth_m: float = 300.0,
 ) -> np.ndarray[tuple[Any, ...], Any]:
@@ -153,10 +150,6 @@ def compute_feature_array(
         sigma = bandwidth_m / pixel_size
         result_array = gaussian_filter(mask, sigma=sigma)
 
-    else:
-        err_msg = f"Unknown mode: {mode}"
-        raise ValueError(err_msg)
-
     # Subset to original shape
     start_row = original_shape[0]
     end_row = original_shape[0] * 2
@@ -166,13 +159,13 @@ def compute_feature_array(
 
     return cast(np.ndarray[tuple[Any, ...], Any], result_array)
 
+
 def save_results(
     pm_data: Any,
-    array: Union[np.ndarray[Any, Any], rt.RasterArray],
+    array: np.ndarray[Any, Any] | rt.RasterArray,
     feature_name: str,
     shared_kwargs: dict[str, Any],
 ) -> None:
-
     # Save original array
     pm_data.save_feature(array, feature_name=feature_name, **shared_kwargs)
 
@@ -189,12 +182,14 @@ def save_results(
 
     # Save log-transformed version
     pm_data.save_feature(log_array, feature_name=f"log_{feature_name}", **shared_kwargs)
+
+
 def generate_overture_features(
     pm_data: PopulationModelData,
     feature_metadata: FeatureMetadata,
     overture_class: str,
     overture_type: str,
-    mode: str = "distance",           # "distance" or "kde_density"
+    mode: str = "distance",  # "distance" or "kde_density"
 ) -> None:
     all_time_points = pmc.ALL_TIME_POINTS
 
@@ -215,7 +210,7 @@ def generate_overture_features(
 
     # Get raster metadata
     shape, transform = get_metadata_from_block_template(feature_metadata.block_template)
-    
+
     # Expand shape and transform for edge effects
     new_shape, new_transform = expand_shape_and_transform(shape, transform)
 
@@ -238,14 +233,12 @@ def generate_overture_features(
         no_data_value=np.nan,
     )
 
-
     if overture_class == "roads":
         prefix = "or"
     elif overture_class == "water":
         prefix = "ow"
-        
-    feature_name = f"{prefix}_{overture_type}_{mode}"
 
+    feature_name = f"{prefix}_{overture_type}_{mode}"
 
     # Save results and log results
     save_results(
@@ -276,6 +269,7 @@ def generate_overture_features(
 
     print(feature_path)
 
+
 def process_overture(
     feature_metadata: FeatureMetadata,
     pm_data: PopulationModelData,
@@ -285,7 +279,7 @@ def process_overture(
         return
 
     overture_dict = pm_data.list_overture_covariates()
-    
+
     for overture_class, overture_types in overture_dict.items():
         for overture_type in overture_types:
             # Always generate distance

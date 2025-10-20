@@ -32,9 +32,8 @@ def read_and_clip_vector(
     """
     Read and clip an Overture vector parquet file to a bounding box.
     """
-    overture_root = Path(
-        "/mnt/team/rapidresponse/pub/population/data/02-processed-data/covariates/overture/"
-    )
+
+    overture_root = pmc.POPULATION_COVARIATE_ROOT / "overture"
 
     vector_file_path = overture_root / overture_class / f"{overture_type}.parquet"
 
@@ -155,7 +154,8 @@ def compute_feature_array(
         result_array = gaussian_filter(mask, sigma=sigma)
 
     else:
-        raise ValueError(f"Unknown mode: {mode}")
+        err_msg = f"Unknown mode: {mode}"
+        raise ValueError(err_msg)
 
     # Subset to original shape
     start_row = original_shape[0]

@@ -14,6 +14,7 @@ from rra_population_model.model_prep.features.built import (
 )
 from rra_population_model.model_prep.features.metadata import get_feature_metadata
 from rra_population_model.model_prep.features.ntl import process_ntl
+from rra_population_model.model_prep.features.overture import process_overture
 
 # GHSL first, as we need the residential mask for msft
 BUILT_VERSIONS = [
@@ -56,6 +57,12 @@ def features_main(
 
     print("Processing NTL")
     process_ntl(
+        feature_metadata=feature_metadata,
+        pm_data=pm_data,
+    )
+
+    print("Processing overture")
+    process_overture(
         feature_metadata=feature_metadata,
         pm_data=pm_data,
     )

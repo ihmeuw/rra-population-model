@@ -126,7 +126,23 @@ def rasterize(
     return cast(NDArray[np.int_], rasterized)
 
 
+def clip_to_block_template(
+    array: np.ndarray[tuple[Any, ...], Any],
+    feature_metadata: FeatureMetadata,
+) -> np.ndarray[tuple[Any, ...], Any]:
+    """
+    Clip the feature array to the block template pixels that are valid (not no_data).
+    """
+    block_template = feature_metadata.block_template
+    mask = ~np.isnan(block_template.to_numpy())
+
+    # Apply the mask
+    clipped_array = np.where(mask, array, np.nan)
+    return clipped_array
+
+
 def compute_feature_array(
+    feature_metadata: FeatureMetadata,
     rasterized: np.ndarray[tuple[Any, ...], Any],
     mode: str,
     original_shape: tuple[int, int],
@@ -157,7 +173,9 @@ def compute_feature_array(
     end_col = original_shape[1] * 2
     result_array = result_array[start_row:end_row, start_col:end_col]
 
-    return cast(np.ndarray[tuple[Any, ...], Any], result_array)
+    clipped_result_array = clip_to_block_template(result_array, feature_metadata)
+
+    return clipped_result_array
 
 
 def save_results(
@@ -219,6 +237,7 @@ def generate_overture_features(
 
     # Generate feature array
     feature_array = compute_feature_array(
+        feature_metadata,
         rasterized,
         mode,
         original_shape=shape,
@@ -266,8 +285,6 @@ def generate_overture_features(
             block_key=feature_metadata.block_key,
             resolution=feature_metadata.resolution,
         )
-
-    print(feature_path)
 
 
 def process_overture(

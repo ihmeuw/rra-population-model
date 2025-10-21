@@ -7,6 +7,7 @@ import rasterra as rt
 from affine import Affine
 from geopandas import GeoDataFrame
 from numpy.typing import NDArray
+from rasterio.fill import fillnodata
 from scipy.ndimage import distance_transform_edt, gaussian_filter
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
@@ -244,12 +245,26 @@ def generate_overture_features(
         transform=new_transform,
     )
 
-    # Convert NumPy array to RasterArray
+    # Convert feature array → RasterArray first (same shape/transform as template)
     feature_raster = rt.RasterArray(
         feature_array.astype(np.float32),
         transform=new_transform,
         crs=feature_metadata.block_template.crs,
         no_data_value=np.nan,
+    )
+
+    # Fill in nodata pixels based on the mask
+    filled_feature_data = fillnodata(
+        feature_raster.to_numpy(),
+        mask=~feature_raster.no_data_mask,  # valid pixels = ~no_data_mask
+    )
+
+    # Convert back to RasterArray with same metadata
+    filled_feature_raster = rt.RasterArray(
+        np.nan_to_num(filled_feature_data),
+        transform=feature_raster.transform,
+        crs=feature_raster.crs,
+        no_data_value=feature_raster.no_data_value,
     )
 
     if overture_class == "roads":
@@ -262,7 +277,7 @@ def generate_overture_features(
     # Save results and log results
     save_results(
         pm_data,
-        feature_raster,
+        filled_feature_raster,
         feature_name=feature_name,
         shared_kwargs=feature_metadata.shared_kwargs,
     )

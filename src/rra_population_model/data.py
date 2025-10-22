@@ -899,38 +899,46 @@ class PopulationModelData:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
         return rt.load_raster(path)
 
-    def compiled_predictions_root(self, resolution: str, version: str) -> Path:
-        return self.model_version_root(resolution, version) / "compiled_predictions"
+    def compiled_predictions_root(self, resolution: str, version: str, measure: str = "") -> Path:
+        return self.model_version_root(resolution, version) / "compiled_predictions" / measure
 
     def compiled_prediction_path(
-        self, group_key: str, time_point: str, model_spec: "ModelSpecification"
+        self, group_key: str, time_point: str, model_spec: "ModelSpecification", measure: str = ""
     ) -> Path:
         resolution = model_spec.resolution
         version = model_spec.model_version
         return (
-            self.compiled_predictions_root(resolution, version)
+            self.compiled_predictions_root(resolution, version, measure)
             / time_point
             / f"{group_key}.tif"
         )
 
     def compiled_prediction_vrt_path(
-        self, time_point: str, model_spec: "ModelSpecification"
+        self, time_point: str, model_spec: "ModelSpecification", measure: str = ""
     ) -> Path:
         resolution = model_spec.resolution
         version = model_spec.model_version
         return (
-            self.compiled_predictions_root(resolution, version)
+            self.compiled_predictions_root(resolution, version, measure)
             / time_point
             / "index.vrt"
         )
 
     def list_compiled_prediction_time_points(
-        self, resolution: str, version: str
+        self, resolution: str, version: str, measure: str = ""
     ) -> list[str]:
         return [
             p.name
-            for p in self.compiled_predictions_root(resolution, version).iterdir()
+            for p in self.compiled_predictions_root(resolution, version, measure).iterdir()
             if p.is_dir()
+        ]
+
+    def list_compiled_prediction_time_point_group_keys(
+        self, resolution: str, version: str, time_point: str, measure: str = ""
+    ) -> list[str]:
+        return [
+            p.name.replace(".tif", "")
+            for p in (self.compiled_predictions_root(resolution, version, measure) / time_point).glob("*.tif")
         ]
 
     def save_compiled_prediction(
@@ -939,9 +947,10 @@ class PopulationModelData:
         group_key: str,
         time_point: str,
         model_spec: "ModelSpecification",
+        measure: str = "",
         **save_kwargs: Any,
     ) -> None:
-        path = self.compiled_prediction_path(group_key, time_point, model_spec)
+        path = self.compiled_prediction_path(group_key, time_point, model_spec, measure)
         mkdir(path.parent, exist_ok=True)
         save_raster_to_cog(raster, path, **save_kwargs)
 
@@ -950,8 +959,9 @@ class PopulationModelData:
         group_key: str,
         time_point: str,
         model_spec: "ModelSpecification",
+        measure: str = "",
     ) -> rt.RasterArray:
-        path = self.compiled_prediction_path(group_key, time_point, model_spec)
+        path = self.compiled_prediction_path(group_key, time_point, model_spec, measure)
         return rt.load_raster(path)
 
     def validation_root(self, resolution: str, version: str) -> Path:

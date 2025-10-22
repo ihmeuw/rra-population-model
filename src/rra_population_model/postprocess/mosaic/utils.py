@@ -25,8 +25,9 @@ def make_vrts(
     time_points: list[str],
     model_spec: ModelSpecification,
     pm_data: PopulationModelData,
+    measure: str = "",
 ) -> None:
     for tp in time_points:
         print(tp)
-        vrt_path = pm_data.compiled_prediction_vrt_path(tp, model_spec)
+        vrt_path = pm_data.compiled_prediction_vrt_path(tp, model_spec, measure)
         make_vrt(vrt_path)

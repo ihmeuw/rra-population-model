@@ -1,4 +1,5 @@
 import itertools
+import tqdm
 
 import click
 import rasterra as rt
@@ -26,27 +27,77 @@ def mosaic_main(
     model_spec = pm_data.load_model_specification(resolution, version)
     block_keys = pm_data.load_modeling_frame(resolution)["block_key"].unique()
 
-    paths = []
+    pop_paths = []
+    denom_paths = []
     for x, y in itertools.product(range(STRIDE), range(STRIDE)):
         bx_, by_ = STRIDE * bx + x, STRIDE * by + y
         block_key = f"B-{bx_:>04}X-{by_:>04}Y"
         if block_key not in block_keys:
             continue
-        paths.append(pm_data.raked_prediction_path(block_key, time_point, model_spec))
+        pop_paths.append(pm_data.raked_prediction_path(block_key, time_point, model_spec))
+        denom_paths.append(pm_data.feature_path(resolution, block_key, model_spec.denominator, time_point))
 
     print("loading rasters")
-    r = rt.load_mf_raster(paths)
+    pop_raster = rt.load_mf_raster(pop_paths)
+    denom_raster = rt.load_mf_raster(denom_paths)
 
     print("writing cog")
     group_key = f"G-{bx:>04}X-{by:>04}Y"
     pm_data.save_compiled_prediction(
-        raster=r,
+        raster=pop_raster,
         group_key=group_key,
         time_point=time_point,
         model_spec=model_spec,
+        measure="population",
         num_cores=num_cores,
         resampling="average",
     )
+    pm_data.save_compiled_prediction(
+        raster=denom_raster,
+        group_key=group_key,
+        time_point=time_point,
+        model_spec=model_spec,
+        measure="building",
+        num_cores=num_cores,
+        resampling="average",
+    )
+
+
+def save_change(
+    resolution: str,
+    version: str,
+    time_points: list[str],
+    output_dir: str,
+    num_cores: int,
+    measure: str = "population",
+):
+    pm_data = PopulationModelData(output_dir)
+    model_spec = pm_data.load_model_specification(resolution, version)
+    group_keys = pm_data.list_compiled_prediction_time_point_group_keys(resolution, version, time_points[-1])
+
+    for group_key in tqdm.tqdm(group_keys):
+        start_raster = pm_data.load_compiled_prediction(
+            group_key,
+            time_points[0],
+            model_spec,
+            measure,
+        )
+        end_raster = pm_data.load_compiled_prediction(
+            group_key,
+            time_points[-1],
+            model_spec,
+            measure,
+        )
+        change_raster = end_raster - start_raster
+        pm_data.save_compiled_prediction(
+            raster=change_raster,
+            group_key=group_key,
+            time_point="_".join(time_points),
+            model_spec=model_spec,
+            measure="change",
+            num_cores=num_cores,
+            resampling="average",
+        )
 
 
 @click.command()
@@ -134,10 +185,22 @@ def mosaic(
         log_root=pm_data.log_dir("postprocess_mosaic"),
     )
 
+    if all([tp in raked_time_points for tp in time_points]):
+        print("Calculating change")
+        save_change(
+            resolution=resolution,
+            version=version,
+            time_points=[sorted(time_points)[0], sorted(time_points)[-1]],
+            output_dir=output_dir,
+            num_cores=num_cores,
+        )
+
     print("Building VRTs")
     model_spec = pm_data.load_model_specification(resolution, version)
-    utils.make_vrts(
-        time_points,
-        model_spec=model_spec,
-        pm_data=pm_data,
-    )
+    for measure in ["population", "building", "change"]:
+        utils.make_vrts(
+            time_points,
+            model_spec=model_spec,
+            pm_data=pm_data,
+            measure=measure,
+        )

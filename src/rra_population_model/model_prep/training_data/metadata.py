@@ -71,6 +71,24 @@ def get_training_metadata(
     ]
 
     features = pm_data.list_features(resolution, tile_meta.block_key, time_point)
+    # features = [
+    #     f for f in features if f.startswith(('microsoft_v7_1', 'ghsl_r2023a')) or 'nighttime_lights' in f
+    # ]
+    # features = [
+    #     f for f in features if not f.startswith(('microsoft_v7_1_d_density', 'microsoft_v7_1_h_height'))
+    # ]
+    # features = [
+    #     f for f in features if not 'nonresidential' in f
+    # ]
+    # features = [
+    #     f for f in features if not 'residential_density' in f
+    # ]
+    # features = [
+    #     f for f in features if not 'height' in f
+    # ]
+
+    denominators = pmc.DENOMINATORS
+    # denominators = [d for d in denominators if d not in ['microsoft_v7_1_d_density', 'microsoft_v7_1_h_density']]
 
     return TrainingMetadata(
         tile_meta=tile_meta,
@@ -79,6 +97,6 @@ def get_training_metadata(
         time_point=time_point,
         tile_neighborhood=tile_neighborhood,
         intersecting_admins=intersecting_admins,
-        denominators=pmc.DENOMINATORS,
+        denominators=denominators,
         features=features,
     )

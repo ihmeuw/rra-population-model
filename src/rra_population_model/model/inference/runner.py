@@ -133,12 +133,17 @@ def inference(
     time_points = sorted(
         [time_point for time_point in time_points if time_point.startswith("202")]
     )
+    # time_points = ["2020q1", "2020q2", "2024q2"]
+    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
+    # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # versions = [v for v in versions if v not in unfinished]
     print(f"Running inference for {len(time_points)} time points.")
 
     jobmon.run_parallel(
         runner="pmtask model",
         task_name="inference",
         node_args={
+            # "version": versions,
             "time-point": time_points,
         },
         task_args={
@@ -148,9 +153,10 @@ def inference(
         },
         task_resources={
             "queue": queue,
-            "memory": "20G",
-            "runtime": "480m",
+            "memory": "40G",
+            "runtime": "720m",
             "project": "proj_rapidresponse",
         },
         log_root=pm_data.log_dir("model_inference"),
+        max_attempts=2,
     )

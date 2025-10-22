@@ -92,7 +92,7 @@ def rake_itu_main(
     # ITU has finer scale boundaries so we need to fill in the gaps
     # using the nearest location id
     to_fill_mask = (itu_mask.to_numpy() == 1) & (location_mask == 0)
-    location_mask = fillnodata(location_mask, ~to_fill_mask, max_search_distance=100)
+    location_mask = fillnodata(location_mask, ~to_fill_mask, max_search_distance=int(itu_mask.resolution[0]))
 
     print("Building modeling frame filters")
     block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
@@ -219,7 +219,7 @@ def rake_itu(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "75G",
+            "memory": "80G",
             "runtime": "60m",
             "project": "proj_rapidresponse",
         },
@@ -232,6 +232,10 @@ def rake_itu(
             "version": version,
             "output-dir": output_dir,
         },
-        max_attempts=3,
+        max_attempts=2,
+        resource_scales={
+            "memory":  iter([300     ]),  # G
+            "runtime": iter([180 * 60]),  # seconds
+        },
         log_root=pm_data.log_dir("postprocess_rake_itu"),
     )

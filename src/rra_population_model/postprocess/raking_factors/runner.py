@@ -229,6 +229,12 @@ def raking_factors(
         full_time_series = [f"{y}q1" for y in range(1950, 2101)]
         time_points = sorted(set(time_points) | set(full_time_series))
 
+    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
+    # # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # # versions = [v for v in versions if v not in unfinished]
+    # # versions = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # time_points = ["2020q1", "2020q2", "2024q2"]
+
     print(f"Building raking factors for {len(time_points)} time points.")
 
     print("Generating raking factors")
@@ -243,6 +249,7 @@ def raking_factors(
             "project": "proj_rapidresponse",
         },
         node_args={
+            # "version": versions,
             "time-point": time_points,
         },
         task_args={

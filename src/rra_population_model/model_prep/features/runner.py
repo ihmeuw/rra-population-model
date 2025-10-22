@@ -21,6 +21,8 @@ BUILT_VERSIONS = [
     # pmc.BUILT_VERSIONS["microsoft_v6"],
     # pmc.BUILT_VERSIONS["microsoft_v7"],
     pmc.BUILT_VERSIONS["microsoft_v7_1"],
+    pmc.BUILT_VERSIONS["microsoft_v7_1_d"],
+    pmc.BUILT_VERSIONS["microsoft_v7_1_h"],
 ]
 
 
@@ -79,9 +81,9 @@ def geospatial_average_features_main(
     features_to_average = [
         "density",
         "volume",
-        "nonresidential_density",
-        "nonresidential_volume",
-        "residential_density",
+        # "nonresidential_density",
+        # "nonresidential_volume",
+        # "residential_density",
         "residential_volume",
     ]
     for built_version in BUILT_VERSIONS:
@@ -89,8 +91,14 @@ def geospatial_average_features_main(
         strategy, fill_time_points = get_processing_strategy(
             built_version, feature_metadata
         )
+        built_version_features = [f"{built_version.name}_{feature}" for feature in features_to_average]
+        if built_version.version in ["v7_1_h", "v7_1_d"]:
+            built_version_features = [
+                bvf for bvf in built_version_features
+                if "volume" in bvf
+            ]
         feature_paths = strategy.generate_geospatial_averages(
-            [f"{built_version.name}_{feature}" for feature in features_to_average],
+            built_version_features,
             pmc.FEATURE_AVERAGE_RADII,
             pm_data,
         )
@@ -181,4 +189,51 @@ def features(
         },
         log_root=pm_data.log_dir("preprocess_features"),
         max_attempts=3,
+    )
+
+
+@click.command()
+@clio.with_time_point(allow_all=True)
+@clio.with_resolution()
+@clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
+@clio.with_output_directory(pmc.MODEL_ROOT)
+@clio.with_queue()
+def geospatial_average_features(
+    time_point: list[str],
+    resolution: str,
+    building_density_dir: str,
+    output_dir: str,
+    queue: str,
+) -> None:
+    """Prepare model geospatial average features."""
+    pm_data = PopulationModelData(output_dir)
+    print("Loading the modeling frame")
+    modeling_frame = pm_data.load_modeling_frame(resolution)
+    block_keys = modeling_frame.block_key.unique().tolist()
+
+    njobs = len(block_keys) * len(time_point)
+    print(f"Submitting {njobs} jobs to process geospatial average features")
+
+    jobmon.run_parallel(
+        runner="pmtask model_prep",
+        task_name="geospatial_average_features",
+        node_args={
+            "block-key": block_keys,
+            "time-point": time_point,
+        },
+        task_args={
+            "building-density-dir": building_density_dir,
+            "output-dir": output_dir,
+            "resolution": resolution,
+        },
+        task_resources={
+            "queue": queue,
+            "cores": 1,
+            "memory": "20G",
+            "runtime": "20m",
+            "project": "proj_rapidresponse",
+            "constraints": "archive",
+        },
+        log_root=pm_data.log_dir("preprocess_geospatial_average_features"),
+        max_attempts=2,
     )

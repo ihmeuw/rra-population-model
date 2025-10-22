@@ -1,4 +1,5 @@
 import itertools
+import shutil
 
 import click
 from lightning import Trainer
@@ -23,27 +24,39 @@ def train_main(
     version: str,
     denominator: str,
     ntl_option: str,
+    ga_option: str,
     output_root: str,
     *,
     verbose: bool = False,
 ) -> None:
     pm_data = PopulationModelData(output_root)
+    version_root = pm_data.model_version_root(resolution, version)
+    if version_root.exists():
+        shutil.rmtree(version_root)
+
     # First generate the model specification and mint a new version directory
     print("Setting up model specification")
-    version_root = pm_data.model_version_root(resolution, version)
     ntl_feature = {
         "none": [],
         "ntl": ["nighttime_lights"],
         "log_ntl": ["log_nighttime_lights"],
     }[ntl_option]
-    bd_features: list[str] = []
+
+    ga_features = {
+        "none": [],
+        "all": [f"{denominator}_{far}m" for far in pmc.FEATURE_AVERAGE_RADII],
+    }
+    for far in pmc.FEATURE_AVERAGE_RADII:
+        ga_features[f"{far}m"] = [f"{denominator}_{far}m"]
+    ga_features = ga_features[ga_option]
+
     model_spec = ModelSpecification(
         model_version=version,
         model_root=str(pm_data.root),
         output_root=str(version_root),
         denominator=denominator,
         resolution=resolution,
-        features=[*bd_features, *ntl_feature],
+        features=[*ga_features, *ntl_feature],
     )
     pm_data.save_model_specification(model_spec)
 
@@ -81,6 +94,7 @@ def train_main(
 @clio.with_version()
 @clio.with_denominator()
 @clio.with_ntl_option()
+@clio.with_ga_option()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_verbose()
 def train_task(
@@ -88,11 +102,12 @@ def train_task(
     version: str,
     denominator: str,
     ntl_option: str,
+    ga_option: str,
     output_dir: str,
     verbose: bool,
 ) -> None:
     train_main(
-        resolution, version, denominator, ntl_option, output_dir, verbose=verbose
+        resolution, version, denominator, ntl_option, ga_option, output_dir, verbose=verbose
     )
 
 
@@ -100,28 +115,64 @@ def train_task(
 @clio.with_resolution()
 @clio.with_denominator(allow_all=True)
 @clio.with_ntl_option(allow_all=True)
+@clio.with_ga_option(allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def train(
     resolution: str,
     denominator: list[str],
     ntl_option: list[str],
+    ga_option: list[str],
     output_dir: str,
     queue: str,
 ) -> None:
+    # ##########################
+    # ## BATCH RUN
+    # built_versions = [
+    #     "ghsl_r2023a",
+    #     "microsoft_v7_1",
+    #     "microsoft_v7_1_d",
+    #     "microsoft_v7_1_h",
+    # ]
+    # built_measures = [
+    #     "density",
+    #     "volume",
+    #     "residential_volume",
+    # ]
+    # denominator = [
+    #     f"{bv}_{bm}" for bv, bm in itertools.product(built_versions, built_measures)
+    # ]
+    # denominator = [d for d in denominator if d not in ["microsoft_v7_1_d_density", "microsoft_v7_1_h_density"]]
+    # ntl_option = [
+    #     "none",
+    #     "ntl",
+    #     "log_ntl",
+    # ]
+    # ga_option = [
+    #     "none",
+    #     "all",
+    # ]
+    # ##########################
+
     pm_data = PopulationModelData(output_dir)
     today, last_version = utils.get_last_run_version(pm_data.model_root(resolution))
     node_args = []
-    for i, (denom, ntl) in enumerate(itertools.product(denominator, ntl_option)):
+    for i, (denom, ntl, ga) in enumerate(itertools.product(denominator, ntl_option, ga_option)):
         version = f"{today}.{last_version + i + 1:03d}"
-        print(f"{version}: {denom} {ntl}")
-        node_args.append((version, denom, ntl))
+        print(f"{version}: {denom} {ntl} {ga}")
+        node_args.append((version, denom, ntl, ga))
+    # node_args = [
+    #     ("2025_10_06.050", "microsoft_v7_1_h_volume",             "none",    "all"),
+    #     ("2025_10_06.054", "microsoft_v7_1_h_volume",             "log_ntl", "all"),
+    #     ("2025_10_06.056", "microsoft_v7_1_h_residential_volume", "none",    "all"),
+    #     ("2025_10_06.060", "microsoft_v7_1_h_residential_volume", "log_ntl", "all"),
+    # ]
 
     jobmon.run_parallel(
         runner="pmtask model",
         task_name="train",
         flat_node_args=(
-            ("version", "denominator", "ntl-option"),
+            ("version", "denominator", "ntl-option", "ga-option"),
             node_args,
         ),
         task_args={
@@ -131,10 +182,10 @@ def train(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "240G",
-            "runtime": "150m",
+            "memory": "320G",
+            "runtime": "960m",
             "project": "proj_rapidresponse",
         },
         log_root=pm_data.log_dir("model_train"),
-        max_attempts=1,
+        max_attempts=2,
     )

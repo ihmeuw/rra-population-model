@@ -106,6 +106,20 @@ def with_ntl_option[**P, T](
     )
 
 
+def with_ga_option[**P, T](
+    *,
+    allow_all: bool = False,
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    return with_choice(
+        "ga_option",
+        "g",
+        allow_all=allow_all,
+        choices=["none", "all"] + [f"{far}m" for far in pmc.FEATURE_AVERAGE_RADII],
+        help="Geospatial averages of building data to include.",
+        convert=allow_all,
+    )
+
+
 def with_version[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--version",

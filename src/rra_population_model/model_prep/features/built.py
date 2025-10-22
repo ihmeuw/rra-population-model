@@ -155,7 +155,6 @@ class ProcessStrategy(ProcessingStrategy):
                     feature_metadata=self.feature_metadata,
                     pm_data=pm_data,
                 )
-                print(f"Processing {feature} with radius {radius}m.")
                 average_measure = (
                     utils.make_spatial_average(
                         tile=buffered_measure,
@@ -170,7 +169,6 @@ class ProcessStrategy(ProcessingStrategy):
                     feature_name=f"{feature}_{radius}m",
                     **self.feature_metadata.shared_kwargs,
                 )
-
                 out_paths[f"{feature}_{radius}m"] = pm_data.feature_path(
                     feature_name=f"{feature}_{radius}m",
                     **self.feature_metadata.shared_kwargs,
@@ -279,6 +277,18 @@ def _generate_microsoft_derived_measures(
             "p_residential": "ghsl_r2023a_proportion_residential",
             "reference_density": "ghsl_r2023a_density",
         },
+        "microsoft_v7_1_d": {
+            "density": "microsoft_v7_1_d_density",
+            "height": "ghsl_r2023a_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
+        },
+        "microsoft_v7_1_h": {
+            "density": "ghsl_r2023a_density",
+            "height": "microsoft_v7_1_h_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
+        },
     }[built_version_name]
     density = pm_data.load_feature(
         feature_name=feature_dict["density"],
@@ -319,11 +329,11 @@ def _generate_microsoft_derived_measures(
 
     out_ops = {
         "density": lambda d, _, __: d,
-        "residential_density": lambda d, _, p: d * p,
-        "nonresidential_density": lambda d, _, p: d * (1 - p),
+        # "residential_density": lambda d, _, p: d * p,
+        # "nonresidential_density": lambda d, _, p: d * (1 - p),
         "volume": lambda d, h, _: h * d,
         "residential_volume": lambda d, h, p: h * d * p,
-        "nonresidential_volume": lambda d, h, p: h * d * (1 - p),
+        # "nonresidential_volume": lambda d, h, p: h * d * (1 - p),
     }
     for measure, op in out_ops.items():
         out = rt.RasterArray(

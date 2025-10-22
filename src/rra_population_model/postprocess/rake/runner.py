@@ -228,13 +228,21 @@ def rake(
         raise ValueError(f'Invalid `input_data` type: {input_data}')
 
     rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)
-
     time_points = clio.convert_choice(time_point, rf_time_points)
 
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()
 
+    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
+    # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # versions = [v for v in versions if v not in unfinished]
+    # versions = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # time_points = ["2020q1", "2020q2"]
+
     print(f"Raking {len(block_keys) * len(time_points)} blocks")
+    # for time_point in time_points:
+    #     print("##############################################################")
+    #     print(f"Raking {len(block_keys) * len(versions)} blocks for {time_point}")
     jobmon.run_parallel(
         runner="pmtask postprocess",
         task_name="rake",
@@ -246,11 +254,13 @@ def rake(
             "project": "proj_rapidresponse",
         },
         node_args={
+            # "version": versions,
             "block-key": block_keys,
             "time-point": time_points,
         },
         task_args={
             "version": version,
+            # "time-point": time_point,
             "resolution": resolution,
             "output-dir": output_dir,
             "input-data": input_data,

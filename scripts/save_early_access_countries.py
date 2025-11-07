@@ -106,6 +106,7 @@ def runner(resolution: str, version: str):
     time_points = pm_data.list_compiled_prediction_time_points(
         resolution,
         version,
+        measure="population",
     )
     time_points = list(sorted(time_points))[1:]
 
@@ -134,7 +135,7 @@ def worker(
     output_root = pm_data.root / 'country_data' / f'{resolution}m' / version
 
     hierarchy = pd.read_parquet(
-        "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/hierarchy_gbd_2021.parquet"
+        "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/hierarchy_gbd_2023.parquet"
     )
     ihme_loc_id = hierarchy.set_index('location_id').loc[location_id, 'ihme_loc_id']
 
@@ -154,7 +155,7 @@ def worker(
 
         logger.info('LOADING COMPILED COGs')
         raster = rt.load_raster(
-            pm_data.compiled_prediction_vrt_path(time_point, model_spec),
+            pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
             buffered_geometry.bounds,
         ).clip(geometry).mask(geometry)
 

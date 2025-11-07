@@ -27,7 +27,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v6", "v7", "v7_1", "v7_1_d", "v7_1_h", "r2023a"]
+    version: Literal["v7_1", "v7_1_d", "v7_1_h", "r2023a"]
     time_points: list[str]
     measures: list[str]
 
@@ -51,8 +51,8 @@ BUILT_VERSIONS = {
         version="r2023a",
         time_points=[f"{y}q1" for y in range(1975, 2030, 5)],
         measures=[
-            # "height",
-            # "proportion_residential",
+            "height",
+            "proportion_residential",
             "density",
             # "residential_density",
             # "nonresidential_density",
@@ -61,30 +61,11 @@ BUILT_VERSIONS = {
             # "nonresidential_volume",
         ],
     ),
-    # "microsoft_v6": BuiltVersion(
-    #     provider="microsoft",
-    #     version="v6",
-    #     time_points=[
-    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
-    #     ][1:],
-    #     measures=["density"],
-    # ),
-    # "microsoft_v7": BuiltVersion(
-    #     provider="microsoft",
-    #     version="v7",
-    #     time_points=[
-    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
-    #     ][1:],
-    #     measures=[
-    #         "density",
-    #         "height",
-    #     ],
-    # ),
     "microsoft_v7_1": BuiltVersion(
         provider="microsoft",
         version="v7_1",
         time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
         ][1:-2],
         measures=[
             "density",

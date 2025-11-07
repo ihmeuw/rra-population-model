@@ -16,14 +16,18 @@ from rra_population_model.model_prep.features.metadata import get_feature_metada
 from rra_population_model.model_prep.features.ntl import process_ntl
 
 # GHSL first, as we need the residential mask for msft
-BUILT_VERSIONS = [
-    pmc.BUILT_VERSIONS["ghsl_r2023a"],
-    # pmc.BUILT_VERSIONS["microsoft_v6"],
-    # pmc.BUILT_VERSIONS["microsoft_v7"],
-    pmc.BUILT_VERSIONS["microsoft_v7_1"],
-    pmc.BUILT_VERSIONS["microsoft_v7_1_d"],
-    pmc.BUILT_VERSIONS["microsoft_v7_1_h"],
-]
+BUILT_VERSIONS = {
+    '40': [
+        pmc.BUILT_VERSIONS["ghsl_r2023a"],
+        pmc.BUILT_VERSIONS["microsoft_v7_1"],
+        pmc.BUILT_VERSIONS["microsoft_v7_1_d"],
+        pmc.BUILT_VERSIONS["microsoft_v7_1_h"],
+    ],
+    '100': [
+        pmc.BUILT_VERSIONS["ghsl_r2023a"],
+        pmc.BUILT_VERSIONS["microsoft_v7_1"],
+    ],
+}
 
 
 def features_main(
@@ -31,18 +35,18 @@ def features_main(
     time_point: str,
     resolution: str,
     building_density_dir: str | Path,
-    model_root: str | Path,
+    output_dir: str | Path,
 ) -> None:
     print(f"Processing features for block {block_key} at time {time_point}")
     bd_data = BuildingDensityData(building_density_dir)
-    pm_data = PopulationModelData(model_root)
+    pm_data = PopulationModelData(output_dir)
 
     print("Loading all feature metadata")
     feature_metadata = get_feature_metadata(
         pm_data, bd_data, resolution, block_key, time_point
     )
 
-    for built_version in BUILT_VERSIONS:
+    for built_version in BUILT_VERSIONS[resolution]:
         print(f"Processing {built_version.name}")
         strategy, fill_time_points = get_processing_strategy(
             built_version, feature_metadata
@@ -68,11 +72,11 @@ def geospatial_average_features_main(
     time_point: str,
     resolution: str,
     building_density_dir: str | Path,
-    model_root: str | Path,
+    output_dir: str | Path,
 ) -> None:
     print(f"Processing features for block {block_key} at time {time_point}")
     bd_data = BuildingDensityData(building_density_dir)
-    pm_data = PopulationModelData(model_root)
+    pm_data = PopulationModelData(output_dir)
 
     print("Loading all feature metadata")
     feature_metadata = get_feature_metadata(
@@ -86,7 +90,7 @@ def geospatial_average_features_main(
         # "residential_density",
         "residential_volume",
     ]
-    for built_version in BUILT_VERSIONS:
+    for built_version in BUILT_VERSIONS[resolution]:
         print(f"Processing {built_version.name}")
         strategy, fill_time_points = get_processing_strategy(
             built_version, feature_metadata

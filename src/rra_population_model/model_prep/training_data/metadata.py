@@ -46,6 +46,7 @@ def get_training_metadata(
     time_point: str,
     intersecting_admins: gpd.GeoDataFrame,
     pm_data: PopulationModelData,
+    purpose: str,
 ) -> TrainingMetadata:
     try:
         full_shape = intersecting_admins.buffer(0).union_all()
@@ -70,26 +71,42 @@ def get_training_metadata(
         TileMetadata.from_model_frame(model_frame, key) for key in neighborhood_keys
     ]
 
-    features = pm_data.list_features(resolution, tile_meta.block_key, time_point)
-    features = [
-        f for f in features if f.startswith(('microsoft_v7_1', 'ghsl_r2023a')) or 'nighttime_lights' in f
-    ]
-    features = [
-        f for f in features if not f.startswith(('microsoft_v7_1_d_density', 'microsoft_v7_1_h_height'))
-    ]
-    features = [
-        f for f in features if not 'nonresidential' in f
-    ]
-    features = [
-        f for f in features if not 'residential_density' in f
-    ]
-    features = [
-        f for f in features if not 'height' in f
-    ]
-
     denominators = pmc.DENOMINATORS
-    denominators = [d for d in denominators if d not in ['microsoft_v7_1_d_density', 'microsoft_v7_1_h_density']]
+    denominators = [
+        d for d in denominators if d not in ['microsoft_v7_1_d_density', 'microsoft_v7_1_h_density']
+    ]
+    if purpose == "inference":
+        denominators = [
+            d for d in denominators if not d.startswith(('microsoft_v7_1_d_', 'microsoft_v7_1_h_'))
+        ]
+    if resolution == "100":
+        denominators = [
+            d for d in denominators if not d.startswith(('microsoft_v7_1_d_', 'microsoft_v7_1_h_'))
+        ]
 
+    if purpose == "inference":
+        features = denominators
+    else:
+        features = pm_data.list_features(resolution, tile_meta.block_key, time_point)
+        features = [
+            f for f in features if f.startswith(('microsoft_v7_1', 'ghsl_r2023a')) or 'nighttime_lights' in f
+        ]
+        features = [
+            f for f in features if not f.startswith(('microsoft_v7_1_d_density', 'microsoft_v7_1_h_height'))
+        ]
+        features = [
+            f for f in features if not 'nonresidential' in f
+        ]
+        features = [
+            f for f in features if not 'residential_density' in f
+        ]
+        features = [
+            f for f in features if not 'height' in f
+        ]
+        if resolution == "100":
+            features = [
+                f for f in features if not f.startswith(('microsoft_v7_1_d_', 'microsoft_v7_1_h_'))
+            ]
 
     return TrainingMetadata(
         tile_meta=tile_meta,

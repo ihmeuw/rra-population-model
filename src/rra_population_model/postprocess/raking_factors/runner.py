@@ -29,6 +29,8 @@ def load_admin_populations(
     # Interpolate the time point population
     if "q" in time_point:
         year, quarter = (int(s) for s in time_point.split("q"))
+        year = min(year, all_pop.index.get_level_values("year_id").max())
+
         if RAKING_VERSION == "gbd_2023":
             next_year = min(year + 1, 2024)
         else:
@@ -244,8 +246,8 @@ def raking_factors(
         task_resources={
             "queue": queue,
             "cores": num_cores,
-            "memory": f"{num_cores * 15}G",
-            "runtime": "240m",
+            "memory": f"{num_cores * 5}G",
+            "runtime": "60m",
             "project": "proj_rapidresponse",
         },
         node_args={

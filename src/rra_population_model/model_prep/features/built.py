@@ -148,13 +148,14 @@ class ProcessStrategy(ProcessingStrategy):
     ) -> dict[str, Path]:
         out_paths = {}
         for feature in features:
+            print(f"Processing {feature}...")
+            buffered_measure = mosaic_tile(
+                measure=feature,
+                feature_metadata=self.feature_metadata,
+                pm_data=pm_data,
+            )
             for radius in feature_average_radii:
-                print(f"Processing {feature} with radius {radius}m.")
-                buffered_measure = mosaic_tile(
-                    measure=feature,
-                    feature_metadata=self.feature_metadata,
-                    pm_data=pm_data,
-                )
+                print(f"    ... with radius {radius}m.")
                 average_measure = (
                     utils.make_spatial_average(
                         tile=buffered_measure,

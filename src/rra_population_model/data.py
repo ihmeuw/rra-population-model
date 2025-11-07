@@ -551,6 +551,11 @@ class PopulationModelData:
         root = self.tile_training_data_root(resolution) / tile_key
         mkdir(root, exist_ok=True)
 
+        for measure, raster in tile_rasters.items():
+            raster_path = root / f"{measure}.tif"
+            touch(raster_path, clobber=True)
+            save_raster(raster, raster_path)
+
         gdf_path = root / "people_per_structure.parquet"
         touch(gdf_path, clobber=True)
         tile_gdf.to_parquet(gdf_path)
@@ -558,11 +563,6 @@ class PopulationModelData:
         paw_path = root / "pixel_area_weights.parquet"
         touch(paw_path, clobber=True)
         tile_area_weights.to_parquet(paw_path)
-
-        for measure, raster in tile_rasters.items():
-            raster_path = root / f"{measure}.tif"
-            touch(raster_path, clobber=True)
-            save_raster(raster, raster_path)
 
     def save_summary_people_per_structure(
         self,
@@ -951,7 +951,7 @@ class PopulationModelData:
         **save_kwargs: Any,
     ) -> None:
         path = self.compiled_prediction_path(group_key, time_point, model_spec, measure)
-        mkdir(path.parent, exist_ok=True)
+        mkdir(path.parent, exist_ok=True, parents=True)
         save_raster_to_cog(raster, path, **save_kwargs)
 
     def load_compiled_prediction(

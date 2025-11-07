@@ -63,43 +63,6 @@ def mosaic_main(
     )
 
 
-def save_change(
-    resolution: str,
-    version: str,
-    time_points: list[str],
-    output_dir: str,
-    num_cores: int,
-    measure: str = "population",
-):
-    pm_data = PopulationModelData(output_dir)
-    model_spec = pm_data.load_model_specification(resolution, version)
-    group_keys = pm_data.list_compiled_prediction_time_point_group_keys(resolution, version, time_points[-1])
-
-    for group_key in tqdm.tqdm(group_keys):
-        start_raster = pm_data.load_compiled_prediction(
-            group_key,
-            time_points[0],
-            model_spec,
-            measure,
-        )
-        end_raster = pm_data.load_compiled_prediction(
-            group_key,
-            time_points[-1],
-            model_spec,
-            measure,
-        )
-        change_raster = end_raster - start_raster
-        pm_data.save_compiled_prediction(
-            raster=change_raster,
-            group_key=group_key,
-            time_point="_".join(time_points),
-            model_spec=model_spec,
-            measure="change",
-            num_cores=num_cores,
-            resampling="average",
-        )
-
-
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
@@ -159,15 +122,14 @@ def mosaic(
     bys = list(range(y_max // STRIDE + int(bool(y_max % STRIDE))))
 
     print("Compiling")
-
     jobmon.run_parallel(
         runner="pmtask postprocess",
         task_name="mosaic",
         task_resources={
             "queue": queue,
             "cores": num_cores,
-            "memory": "120G",
-            "runtime": "30m",
+            "memory": "160G",
+            "runtime": "15m",
             "project": "proj_rapidresponse",
         },
         node_args={
@@ -181,13 +143,13 @@ def mosaic(
             "num-cores": num_cores,
             "output-dir": output_dir,
         },
-        max_attempts=1,
+        max_attempts=2,
         log_root=pm_data.log_dir("postprocess_mosaic"),
     )
 
     if all([tp in raked_time_points for tp in time_points]):
-        print("Calculating change")
-        save_change(
+        print("Calculating and storing change")
+        utils.save_change(
             resolution=resolution,
             version=version,
             time_points=[sorted(time_points)[0], sorted(time_points)[-1]],
@@ -198,8 +160,9 @@ def mosaic(
     print("Building VRTs")
     model_spec = pm_data.load_model_specification(resolution, version)
     for measure in ["population", "building", "change"]:
+        measure_time_points = pm_data.list_compiled_prediction_time_points(resolution, version, measure)
         utils.make_vrts(
-            time_points,
+            measure_time_points,
             model_spec=model_spec,
             pm_data=pm_data,
             measure=measure,

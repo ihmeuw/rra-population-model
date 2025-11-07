@@ -21,11 +21,11 @@ def training_data_main(
     tile_key: str,
     time_point: str,
     purpose: str,
-    model_root: str | Path,
+    output_dir: str | Path,
 ) -> None:
     """Build the training data for the model for a single tile."""
     print("Loading metadata")
-    pm_data = PopulationModelData(model_root)
+    pm_data = PopulationModelData(output_dir)
     model_frame = pm_data.load_modeling_frame(resolution)
     tile_meta = TileMetadata.from_model_frame(model_frame, tile_key)
 
@@ -48,6 +48,7 @@ def training_data_main(
         time_point=time_point,
         intersecting_admins=admins,
         pm_data=pm_data,
+        purpose=purpose,
     )
 
     model_gdfs = []
@@ -224,6 +225,12 @@ def training_data(
     to_run = utils.build_arg_list(resolution, pm_data, purpose)
     to_run = [i for i in to_run if i[1].startswith('202')]
 
+    if purpose == "training":
+        to_run = [
+            (i, j, k) for i, j, k in to_run
+            if not (pm_data.tile_training_data_root(resolution) / i / "pixel_area_weights.parquet").exists()
+        ]
+
     time_points = sorted(list(set([i[1] for i in to_run])))
     years = sorted(list(set([time_point.split('q')[0] for time_point in time_points])))
     print(f"Starting annual workflows for each year: {', '.join(years)}")
@@ -251,8 +258,8 @@ def training_data(
             },
             max_attempts=5,
             resource_scales={
-                "memory":  iter([20     , 40     , 80     , 180    ]),  # G
-                "runtime": iter([10 * 60, 20 * 60, 30 * 60, 80 * 60]),  # seconds
+                "memory":  iter([20     , 40     , 80     , 240    ]),  # G
+                "runtime": iter([10 * 60, 20 * 60, 30 * 60, 90 * 60]),  # seconds
             },
             log_root=pm_data.log_dir("model_prep_training_data"),
         )

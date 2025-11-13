@@ -29,16 +29,27 @@ def load_admin_populations(
     # Interpolate the time point population
     if "q" in time_point:
         year, quarter = (int(s) for s in time_point.split("q"))
-        year = min(year, all_pop.index.get_level_values("year_id").max())
 
         if RAKING_VERSION == "gbd_2023":
-            next_year = min(year + 1, 2024)
+            max_data_year = all_pop.index.get_level_values("year_id").max()
+            next_year = year + 1
+            if next_year > 2026:
+                raise ValueError("Don't project beyond 2025")
+            if next_year > max_data_year:
+                prior_year_pop = all_pop.loc[max_data_year - (year - max_data_year)]
+                next_year_pop = all_pop.loc[max_data_year - (next_year - max_data_year)]
+                max_data_year_pop = all_pop.loc[max_data_year]
+                prior_year_pop = max_data_year_pop * (max_data_year_pop / prior_year_pop)
+                next_year_pop = max_data_year_pop * (max_data_year_pop / next_year_pop)
+            else:
+                prior_year_pop = all_pop.loc[year]
+                next_year_pop = all_pop.loc[next_year]
         else:
             next_year = min(year + 1, 2100)
-        weight = (int(quarter) - 1) / 4
+            prior_year_pop = all_pop.loc[year]
+            next_year_pop = all_pop.loc[next_year]
 
-        prior_year_pop = all_pop.loc[year]
-        next_year_pop = all_pop.loc[next_year]
+        weight = (int(quarter) - 1) / 4
 
         pop = ((1 - weight) * prior_year_pop + weight * next_year_pop).reset_index()
     else:
@@ -71,9 +82,9 @@ def aggregate_unraked_population(
     pm_data = PopulationModelData()
     model_spec = pm_data.load_model_specification(resolution, model_version)
 
-    if input_data == 'raw':
+    if input_data == "raw":
         r = pm_data.load_raw_prediction(block_key, time_point, model_spec)
-    elif input_data == 'raked':
+    elif input_data in ["raked", "raw_skip"]:
         r = pm_data.load_raked_prediction(block_key, time_point, model_spec)
     for location_id, geom in shape_map.items():
         est_pop[location_id] = np.nansum(r.mask(geom))  # type: ignore[assignment]
@@ -215,10 +226,10 @@ def raking_factors(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    if input_data == 'raw':
+    if input_data == "raw":
         if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
             raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
-    elif input_data != 'raked':
+    elif input_data not in ["raked", "raw_skip"]:
         raise ValueError(f'Invalid `input_data` type: {input_data}')
 
     pm_data.maybe_copy_version(resolution, version, copy_from_version)
@@ -231,15 +242,10 @@ def raking_factors(
         full_time_series = [f"{y}q1" for y in range(1950, 2101)]
         time_points = sorted(set(time_points) | set(full_time_series))
 
-    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
-    # # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
-    # # versions = [v for v in versions if v not in unfinished]
-    # # versions = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
-    # time_points = ["2020q1", "2020q2", "2024q2"]
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
+    # time_points = ["2020q1", "2020q2"]
 
     print(f"Building raking factors for {len(time_points)} time points.")
-
-    print("Generating raking factors")
     jobmon.run_parallel(
         runner="pmtask postprocess",
         task_name="raking_factors",

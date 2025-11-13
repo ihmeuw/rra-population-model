@@ -29,11 +29,11 @@ def rake_main(
         pm_data, resolution, version, time_point
     )
     print("Loading unraked prediction")
-    if input_data == 'raw':
+    if input_data == "raw":
         unraked_data = pm_data.load_raw_prediction(
             block_key, prediction_time_point, model_spec
         )
-    elif input_data == 'raked':
+    elif input_data in ["raked", "raw_skip"]:
         unraked_data = pm_data.load_raked_prediction(
             block_key, prediction_time_point, model_spec
         )
@@ -79,7 +79,7 @@ def rake_main(
         if input_data == "raw":
             print("Loading inference data")
             model_frame = pm_data.load_modeling_frame(resolution)
-            model_frame = model_frame.loc[model_frame['block_key'] == block_key]
+            model_frame = model_frame.loc[model_frame["block_key"] == block_key]
 
             census_population = []
             census_weight = []
@@ -88,7 +88,7 @@ def rake_main(
                     resolution,
                     tile_key,
                     time_point,
-                    f'population_{model_spec.denominator}',
+                    f"population_{model_spec.denominator}",
                 )
                 if tile_census_population is None:
                     tile_census_population = pm_data.load_feature(
@@ -115,7 +115,7 @@ def rake_main(
                         resolution,
                         tile_key,
                         time_point,
-                        'area_weight',
+                        "area_weight",
                     )
                 census_population.append(tile_census_population)
                 census_weight.append(tile_census_weight)
@@ -133,7 +133,7 @@ def rake_main(
                     census_weight = rt.merge([census_weight, missing])
                     census_population = rt.merge([census_population, missing])
                     if (np.round(census_weight.bounds, 2) != np.round(raked.bounds, 2)).any():
-                        raise ValueError('Still incompatible after attaching missing pixels')
+                        raise ValueError("Still incompatible after attaching missing pixels")
 
                 array = census_population.to_numpy()
                 nan_mask = np.isnan(array)
@@ -162,8 +162,8 @@ def rake_main(
                 )
             else:
                 print("No population to splice")
-        elif input_data != 'raked':
-            raise ValueError(f'Invalid `input_data` type: {input_data}')
+        elif input_data not in ["raked", "raw_skip"]:
+            raise ValueError(f"Invalid `input_data` type: {input_data}")
 
     print("Saving raked prediction")
     pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)
@@ -221,11 +221,11 @@ def rake(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    if input_data == 'raw':
+    if input_data == "raw":
         if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
-            raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
-    elif input_data != 'raked':
-        raise ValueError(f'Invalid `input_data` type: {input_data}')
+            raise ValueError(f"Raked predictions already exist, cannot run with `input_data` set to `raw`.")
+    elif input_data not in ["raked", "raw_skip"]:
+        raise ValueError(f"Invalid `input_data` type: {input_data}")
 
     rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)
     time_points = clio.convert_choice(time_point, rf_time_points)
@@ -233,16 +233,13 @@ def rake(
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()
 
-    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
-    # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
-    # versions = [v for v in versions if v not in unfinished]
-    # versions = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
     # time_points = ["2020q1", "2020q2"]
 
     print(f"Raking {len(block_keys) * len(time_points)} blocks")
     # for time_point in time_points:
-    #     print("##############################################################")
-    #     print(f"Raking {len(block_keys) * len(versions)} blocks for {time_point}")
+    # print("##############################################################")
+    # print(f"Raking {len(block_keys) * len(versions)} blocks for {time_point}")
     jobmon.run_parallel(
         runner="pmtask postprocess",
         task_name="rake",

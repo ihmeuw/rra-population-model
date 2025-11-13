@@ -167,10 +167,7 @@ def metrics(
     validation_frame = pm_data.load_validation_frame(resolution)
     block_keys = list(validation_frame.block_key.unique())
 
-    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
-    # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
-    # versions = [v for v in versions if v not in unfinished]
-    # versions = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
 
     jobmon.run_parallel(
         runner="pmtask validate",

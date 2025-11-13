@@ -130,13 +130,20 @@ def inference(
     pm_data = PopulationModelData(output_dir)
     feature_time_points = pm_data.list_feature_time_points(resolution)
     time_points = clio.convert_choice(time_point, feature_time_points)
-    time_points = sorted(
-        [time_point for time_point in time_points if time_point.startswith("202")]
-    )
-    # time_points = ["2020q1", "2020q2", "2024q2"]
-    # versions = [f"2025_10_06.0{(i + 1):02d}" for i in range(60)]
-    # unfinished = ["2025_10_06.050", "2025_10_06.054", "2025_10_06.056", "2025_10_06.060"]
-    # versions = [v for v in versions if v not in unfinished]
+    model_spec = pm_data.load_model_specification(resolution, version)
+    if model_spec.denominator.startswith("microsoft"):
+        time_points = sorted(
+            [time_point for time_point in time_points if time_point.startswith("202")]
+        )
+    elif model_spec.denominator.startswith("ghsl"):
+        time_points = sorted(
+            [time_point for time_point in time_points if time_point.endswith("q1")]
+        )
+    else:
+        msg = f"Unexpected denominator: {model_spec.denominator}"
+        raise ValueError(msg)
+    # time_points = ["2020q1", "2020q2"]
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
     print(f"Running inference for {len(time_points)} time points.")
 
     jobmon.run_parallel(

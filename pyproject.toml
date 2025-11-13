@@ -6,6 +6,7 @@ license = "BSD-3-Clause"
 readme = "README.md"
 authors = [
     {name = "James Collins", email = "collijk@uw.edu"},
+    {name = "Ryan Barber", email = "rmbarber@uw.edu"},
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -27,6 +28,9 @@ dependencies = [
     "contextily>=1.6.2",
     "xarray>=2025.7.0",
     "netCDF4>=1.7.2",
+    "modrover @ git+https://github.com/ihmeuw-msca/modrover.git",
+    "rasterstats>=0.20.0",
+    "rioxarray>=0.20.0",
 ]
 
 [project.urls]

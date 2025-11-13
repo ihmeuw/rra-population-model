@@ -161,12 +161,6 @@ def train(
         version = f"{today}.{last_version + i + 1:03d}"
         print(f"{version}: {denom} {ntl} {ga}")
         node_args.append((version, denom, ntl, ga))
-    # node_args = [
-    #     ("2025_10_06.050", "microsoft_v7_1_h_volume",             "none",    "all"),
-    #     ("2025_10_06.054", "microsoft_v7_1_h_volume",             "log_ntl", "all"),
-    #     ("2025_10_06.056", "microsoft_v7_1_h_residential_volume", "none",    "all"),
-    #     ("2025_10_06.060", "microsoft_v7_1_h_residential_volume", "log_ntl", "all"),
-    # ]
 
     jobmon.run_parallel(
         runner="pmtask model",

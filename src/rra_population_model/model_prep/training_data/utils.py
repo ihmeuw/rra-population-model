@@ -14,6 +14,8 @@ from rra_population_model.model_prep.training_data.metadata import (
     TrainingMetadata,
 )
 
+POPULATION_OFFSET = 0.1
+
 
 def get_intersecting_admins(
     tile_meta: TileMetadata,
@@ -316,28 +318,31 @@ def process_model_gdf(
             & (denominator_df["admin_built"] == 0)
         )
 
-        denominator_df["admin_occupancy_rate"] = -1.0
-        occupancy_rate = safe_divide(
+        admin_occupancy_rate = safe_divide(
             denominator_df["admin_population"].astype(float),
             denominator_df["admin_built"],
         )
-
-        denominator_df.loc[mask, "admin_occupancy_rate"] = occupancy_rate[mask]
-
+        admin_offset_occupancy_rate = safe_divide(
+            POPULATION_OFFSET + denominator_df["admin_population"].astype(float),
+            denominator_df["admin_built"],
+        )
+        denominator_df["admin_occupancy_rate"] = -1.0
+        denominator_df.loc[mask, "admin_occupancy_rate"] = admin_occupancy_rate[mask]
         denominator_df["admin_log_occupancy_rate"] = -1.0
-        denominator_df.loc[mask, "admin_log_occupancy_rate"] = np.log(
-            1 + denominator_df.loc[mask, "admin_occupancy_rate"]
-        )
+        denominator_df.loc[mask, "admin_log_occupancy_rate"] = np.log(admin_offset_occupancy_rate)
 
+        pixel_occupancy_rate = safe_divide(
+            denominator_df["pixel_population"],
+            denominator_df["pixel_built"],
+        )
+        pixel_offset_occupancy_rate = safe_divide(
+            POPULATION_OFFSET + denominator_df["pixel_population"],
+            denominator_df["pixel_built"],
+        )
         denominator_df["pixel_occupancy_rate"] = -1.0
-        denominator_df.loc[mask, "pixel_occupancy_rate"] = safe_divide(
-            denominator_df.loc[mask, "pixel_population"],
-            denominator_df.loc[mask, "pixel_built"],
-        )
+        denominator_df.loc[mask, "pixel_occupancy_rate"] = pixel_occupancy_rate[mask]
         denominator_df["pixel_log_occupancy_rate"] = -1.0
-        denominator_df.loc[mask, "pixel_log_occupancy_rate"] = np.log(
-            1 + denominator_df.loc[mask, "pixel_occupancy_rate"]
-        )
+        denominator_df.loc[mask, "pixel_log_occupancy_rate"] = np.log(pixel_offset_occupancy_rate[mask])
 
         keep_measures = [
             "admin_built",

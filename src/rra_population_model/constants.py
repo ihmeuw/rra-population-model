@@ -67,6 +67,10 @@ BUILT_VERSIONS = {
         time_points=[
             f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
         ][1:-2],
+        measures=[
+            "density",
+            "height",
+        ],
     ),
     "microsoft_v8": BuiltVersion(
         provider="microsoft",

@@ -19,13 +19,12 @@ from rra_population_model.model_prep.features.ntl import process_ntl
 BUILT_VERSIONS = {
     '40': [
         pmc.BUILT_VERSIONS["ghsl_r2023a"],
+        pmc.BUILT_VERSIONS["microsoft_v8"],
         pmc.BUILT_VERSIONS["microsoft_v7_1"],
-        pmc.BUILT_VERSIONS["microsoft_v7_1_d"],
-        pmc.BUILT_VERSIONS["microsoft_v7_1_h"],
     ],
     '100': [
         pmc.BUILT_VERSIONS["ghsl_r2023a"],
-        pmc.BUILT_VERSIONS["microsoft_v7_1"],
+        pmc.BUILT_VERSIONS["microsoft_v8"],
     ],
 }
 

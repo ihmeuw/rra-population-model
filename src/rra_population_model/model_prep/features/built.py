@@ -290,6 +290,12 @@ def _generate_microsoft_derived_measures(
             "p_residential": "ghsl_r2023a_proportion_residential",
             "reference_density": "ghsl_r2023a_density",
         },
+        "microsoft_v8": {
+            "density": "microsoft_v8_density",
+            "height": "microsoft_v8_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
+        },
     }[built_version_name]
     density = pm_data.load_feature(
         feature_name=feature_dict["density"],

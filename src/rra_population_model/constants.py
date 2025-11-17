@@ -27,7 +27,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v7_1", "v7_1_d", "v7_1_h", "r2023a"]
+    version: Literal["v8", "r2023a"]
     time_points: list[str]
     measures: list[str]
 
@@ -61,9 +61,9 @@ BUILT_VERSIONS = {
             # "nonresidential_volume",
         ],
     ),
-    "microsoft_v7_1": BuiltVersion(
+    "microsoft_v8": BuiltVersion(
         provider="microsoft",
-        version="v7_1",
+        version="v8",
         time_points=[
             f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
         ][1:-2],
@@ -72,22 +72,22 @@ BUILT_VERSIONS = {
             "height",
         ],
     ),
-    "microsoft_v7_1_d": BuiltVersion(
-        provider="microsoft",
-        version="v7_1_d",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
-        ][1:-2],
-        measures=["density"],
-    ),
-    "microsoft_v7_1_h": BuiltVersion(
-        provider="microsoft",
-        version="v7_1_h",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
-        ][1:-2],
-        measures=["height"],
-    ),
+    # "microsoft_v7_1_d": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7_1_d",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+    #     ][1:-2],
+    #     measures=["density"],
+    # ),
+    # "microsoft_v7_1_h": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7_1_h",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+    #     ][1:-2],
+    #     measures=["height"],
+    # ),
 }
 
 DENOMINATORS = []

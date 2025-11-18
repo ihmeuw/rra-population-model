@@ -96,11 +96,6 @@ def geospatial_average_features_main(
             built_version, feature_metadata
         )
         built_version_features = [f"{built_version.name}_{feature}" for feature in features_to_average]
-        if built_version.version in ["v7_1_h", "v7_1_d"]:
-            built_version_features = [
-                bvf for bvf in built_version_features
-                if "volume" in bvf
-            ]
         feature_paths = strategy.generate_geospatial_averages(
             built_version_features,
             pmc.FEATURE_AVERAGE_RADII,

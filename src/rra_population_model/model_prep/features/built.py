@@ -450,11 +450,13 @@ def mosaic_tile(
     pm_data: PopulationModelData,
 ) -> rt.RasterArray:
     tiles = []
-    for bounds in feature_metadata.block_bounds.values():
+    for buffer_block_key, bounds in feature_metadata.block_bounds.items():
         try:
             tile = pm_data.load_feature(
+                block_key=buffer_block_key,
                 feature_name=measure,
-                **feature_metadata.shared_kwargs,
+                resolution=feature_metadata.resolution,
+                time_point=feature_metadata.time_point,
                 subset_bounds=bounds,
             )
             tile = tile.reproject(

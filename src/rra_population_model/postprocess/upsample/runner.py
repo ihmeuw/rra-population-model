@@ -85,7 +85,7 @@ def upsample_main(
     model_spec = pm_data.load_model_specification(resolution, version)
 
     gdalwarp_path = shutil.which("gdalwarp")
-    vrt_path = pm_data.compiled_prediction_vrt_path(time_point, model_spec)
+    vrt_path = pm_data.compiled_prediction_vrt_path(time_point, model_spec, "population")
 
     if "f" in spec_name:
         out_root = pm_data.figure_results / run_stamp
@@ -160,7 +160,7 @@ def upsample(
     pm_data = PopulationModelData(output_dir)
 
     compiled_time_points = pm_data.list_compiled_prediction_time_points(
-        resolution, version
+        resolution, version, "population"
     )
     time_points = clio.convert_choice(time_point, compiled_time_points)
 

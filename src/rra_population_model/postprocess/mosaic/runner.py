@@ -29,6 +29,7 @@ def mosaic_main(
 
     pop_paths = []
     denom_paths = []
+    poverty_paths = []
     for x, y in itertools.product(range(STRIDE), range(STRIDE)):
         bx_, by_ = STRIDE * bx + x, STRIDE * by + y
         block_key = f"B-{bx_:>04}X-{by_:>04}Y"
@@ -36,10 +37,12 @@ def mosaic_main(
             continue
         pop_paths.append(pm_data.raked_prediction_path(block_key, time_point, model_spec))
         denom_paths.append(pm_data.feature_path(resolution, block_key, model_spec.denominator, time_point))
+        poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
 
     print("loading rasters")
     pop_raster = rt.load_mf_raster(pop_paths)
     denom_raster = rt.load_mf_raster(denom_paths)
+    poverty_raster = rt.load_mf_raster(poverty_paths)
 
     print("writing cog")
     group_key = f"G-{bx:>04}X-{by:>04}Y"
@@ -52,12 +55,22 @@ def mosaic_main(
         num_cores=num_cores,
         resampling="average",
     )
+    if resolution == "40":
+        pm_data.save_compiled_prediction(
+            raster=denom_raster,
+            group_key=group_key,
+            time_point=time_point,
+            model_spec=model_spec,
+            measure="building",
+            num_cores=num_cores,
+            resampling="average",
+        )
     pm_data.save_compiled_prediction(
-        raster=denom_raster,
+        raster=poverty_raster,
         group_key=group_key,
         time_point=time_point,
         model_spec=model_spec,
-        measure="building",
+        measure="poverty",
         num_cores=num_cores,
         resampling="average",
     )
@@ -147,19 +160,23 @@ def mosaic(
         log_root=pm_data.log_dir("postprocess_mosaic"),
     )
 
-    if all([tp in raked_time_points for tp in time_points]):
+    if resolution == "40" and all([tp in raked_time_points for tp in time_points]):
         print("Calculating and storing change")
         utils.save_change(
             resolution=resolution,
             version=version,
             time_points=[sorted(time_points)[0], sorted(time_points)[-1]],
             output_dir=output_dir,
-            num_cores=num_cores,
+            num_cores=1,
         )
 
     print("Building VRTs")
     model_spec = pm_data.load_model_specification(resolution, version)
-    for measure in ["population", "building", "change"]:
+    if resolution == "40":
+        measures = ["population", "building", "change", "poverty"]
+    else:
+        measures = ["population", "poverty"]
+    for measure in measures:
         measure_time_points = pm_data.list_compiled_prediction_time_points(resolution, version, measure)
         utils.make_vrts(
             measure_time_points,

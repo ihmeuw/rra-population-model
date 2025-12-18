@@ -91,7 +91,7 @@ def workflow(
 
 def runner(resolution: str, version: str):
     hierarchy = pd.read_parquet(
-        "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/hierarchy_gbd_2021.parquet"
+        "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/hierarchy_gbd_2023.parquet"
     )
     location_ids = hierarchy.loc[hierarchy['level'] == 3, 'location_id'].to_list()
     ihme_loc_ids = hierarchy.loc[hierarchy['level'] == 3, 'ihme_loc_id'].to_list()

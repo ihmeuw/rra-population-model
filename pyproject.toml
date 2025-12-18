@@ -14,7 +14,9 @@ dependencies = [
     "geopandas>=1.0.1",
     "numpy>=2.2.1",
     "pandas>=2.2.3",
-    "rasterra>=0.6.2",
+    "rasterra==0.6.2",
+    # "rasterra (>=0.6.3,<0.7.0)",
+    "matplotlib>=3.10.1",
     "shapely>=2.0.6",
     "pydantic>=2.10.4",
     "rra-tools>=1.0.27",
@@ -31,6 +33,7 @@ dependencies = [
     "modrover @ git+https://github.com/ihmeuw-msca/modrover.git",
     "rasterstats>=0.20.0",
     "rioxarray>=0.20.0",
+    "lxml>=6.0.2",
 ]
 
 [project.urls]

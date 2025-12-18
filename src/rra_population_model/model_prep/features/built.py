@@ -290,6 +290,12 @@ def _generate_microsoft_derived_measures(
             "p_residential": "ghsl_r2023a_proportion_residential",
             "reference_density": "ghsl_r2023a_density",
         },
+        "microsoft_v8": {
+            "density": "microsoft_v8_density",
+            "height": "microsoft_v8_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
+        },
     }[built_version_name]
     density = pm_data.load_feature(
         feature_name=feature_dict["density"],
@@ -444,11 +450,13 @@ def mosaic_tile(
     pm_data: PopulationModelData,
 ) -> rt.RasterArray:
     tiles = []
-    for bounds in feature_metadata.block_bounds.values():
+    for buffer_block_key, bounds in feature_metadata.block_bounds.items():
         try:
             tile = pm_data.load_feature(
+                block_key=buffer_block_key,
                 feature_name=measure,
-                **feature_metadata.shared_kwargs,
+                resolution=feature_metadata.resolution,
+                time_point=feature_metadata.time_point,
                 subset_bounds=bounds,
             )
             tile = tile.reproject(

@@ -29,11 +29,11 @@ def rake_main(
         pm_data, resolution, version, time_point
     )
     print("Loading unraked prediction")
-    if input_data == "raw":
+    if input_data in ["raw", "raw_skip"]:
         unraked_data = pm_data.load_raw_prediction(
             block_key, prediction_time_point, model_spec
         )
-    elif input_data in ["raked", "raw_skip"]:
+    elif input_data == "raked":
         unraked_data = pm_data.load_raked_prediction(
             block_key, prediction_time_point, model_spec
         )
@@ -221,10 +221,10 @@ def rake(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    if input_data == "raw":
+    if input_data in ["raw", "raw_skip"]:
         if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
             raise ValueError(f"Raked predictions already exist, cannot run with `input_data` set to `raw`.")
-    elif input_data not in ["raked", "raw_skip"]:
+    elif input_data not in ["raked"]:
         raise ValueError(f"Invalid `input_data` type: {input_data}")
 
     rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)

@@ -895,9 +895,11 @@ class PopulationModelData:
         block_key: str,
         time_point: str,
         model_spec: "ModelSpecification",
+        subset_bounds: shapely.Polygon | None = None,
     ) -> rt.RasterArray:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
-        return rt.load_raster(path)
+        raster = rt.load_raster(path, subset_bounds)
+        return raster
 
     def compiled_predictions_root(self, resolution: str, version: str, measure: str = "") -> Path:
         return self.model_version_root(resolution, version) / "compiled_predictions" / measure

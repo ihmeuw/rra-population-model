@@ -82,9 +82,9 @@ def aggregate_unraked_population(
     pm_data = PopulationModelData()
     model_spec = pm_data.load_model_specification(resolution, model_version)
 
-    if input_data == "raw":
+    if input_data in ["raw", "raw_skip"]:
         r = pm_data.load_raw_prediction(block_key, time_point, model_spec)
-    elif input_data in ["raked", "raw_skip"]:
+    elif input_data == "raked":
         r = pm_data.load_raked_prediction(block_key, time_point, model_spec)
     for location_id, geom in shape_map.items():
         est_pop[location_id] = np.nansum(r.mask(geom))  # type: ignore[assignment]
@@ -226,10 +226,10 @@ def raking_factors(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    if input_data == "raw":
+    if input_data in ["raw", "raw_skip"]:
         if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
             raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
-    elif input_data not in ["raked", "raw_skip"]:
+    elif input_data not in ["raked"]:
         raise ValueError(f'Invalid `input_data` type: {input_data}')
 
     pm_data.maybe_copy_version(resolution, version, copy_from_version)

@@ -14,7 +14,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import rra_population_model.constants as pmc
 from rra_population_model.data import PopulationModelData, save_raster
 
-FIELDMAPS_ROOT = pmc.MODEL_ROOT / 'admin-inputs' / 'fieldmaps'
+FIELDMAPS_ROOT = pmc.MODEL_ROOT / 'admin-inputs' / 'itu-masks' / 'fieldmaps'
 FIELDMAPS_FILES = {
     'humanitarian': 'adm1_polygons_UNCOD_geoBoundaries.parquet',
     'open': 'adm1_polygons_geoBoundaries.parquet',
@@ -26,7 +26,12 @@ def load_data(dataset_name: str, pm_data: PopulationModelData):
 
     data = gpd.read_parquet(FIELDMAPS_ROOT / 'datasets' / FIELDMAPS_FILES[dataset_name])
 
-    data_caribbean = data.loc[data['iso_2'].isin(itu_caribbean['Iso2Code'])].loc[:, ['adm0_name', 'iso_2', 'iso_3', 'geometry']].dissolve(by=['adm0_name', 'iso_2', 'iso_3'])
+    data_caribbean = data.loc[data['iso_2'].isin(itu_caribbean['Iso2Code'])]
+    data_caribbean = data_caribbean.loc[
+        # multiple rows for Jamaica, just keep matching admin0
+        (data_caribbean['iso_2'] != 'JM') | (data_caribbean['adm0_name'] == 'Jamaica')
+    ]
+    data_caribbean = data_caribbean.loc[:, ['adm0_name', 'iso_2', 'iso_3', 'geometry']].dissolve(by=['adm0_name', 'iso_2', 'iso_3'])
 
     missing = [i for i in itu_caribbean['Iso2Code'] if i not in data_caribbean.index.get_level_values('iso_2')]
     if missing:
@@ -110,7 +115,7 @@ def main():
             template_mask, raster_mask = polygon_to_raster_mask(
                 iso3=iso3,
                 gdf=data_humanitarian,
-                resolution=40,
+                resolution=100,
                 pm_data=pm_data,
             )
             save_raster(raster_mask, FIELDMAPS_ROOT / f"{iso3}.tif")

@@ -130,9 +130,7 @@ def train(
     # ## BATCH RUN
     # built_versions = [
     #     "ghsl_r2023a",
-    #     "microsoft_v7_1",
-    #     "microsoft_v7_1_d",
-    #     "microsoft_v7_1_h",
+    #     "microsoft_v8",
     # ]
     # built_measures = [
     #     "density",
@@ -142,7 +140,6 @@ def train(
     # denominator = [
     #     f"{bv}_{bm}" for bv, bm in itertools.product(built_versions, built_measures)
     # ]
-    # denominator = [d for d in denominator if d not in ["microsoft_v7_1_d_density", "microsoft_v7_1_h_density"]]
     # ntl_option = [
     #     "none",
     #     "ntl",

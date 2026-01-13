@@ -242,8 +242,7 @@ def raking_factors(
         full_time_series = [f"{y}q1" for y in range(1950, 2101)]
         time_points = sorted(set(time_points) | set(full_time_series))
 
-    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
-    # time_points = ["2020q1", "2020q2"]
+    # versions = [f"2025_12_18.0{(i + 1):02d}" for i in range(36)]
 
     print(f"Building raking factors for {len(time_points)} time points.")
     jobmon.run_parallel(

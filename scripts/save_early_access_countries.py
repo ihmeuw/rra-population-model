@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from loguru import logger
 from typing import List
+import tqdm
 
 import pandas as pd
 import geopandas as gpd
@@ -13,7 +14,15 @@ import shutil
 
 from rra_tools.shell_tools import mkdir
 
-from rra_population_model.data import PopulationModelData, save_raster
+from rra_population_model.data import (
+    PopulationModelData,
+    save_raster,
+)
+from rra_population_model.constants import CRSES
+
+ANTI_MERIDIAN_LOCATION_IDS = [
+    102,  # United States
+]
 
 
 def workflow(
@@ -93,8 +102,9 @@ def runner(resolution: str, version: str):
     hierarchy = pd.read_parquet(
         "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/hierarchy_gbd_2023.parquet"
     )
-    location_ids = hierarchy.loc[hierarchy['level'] == 3, 'location_id'].to_list()
-    ihme_loc_ids = hierarchy.loc[hierarchy['level'] == 3, 'ihme_loc_id'].to_list()
+    is_level_3 = hierarchy['level'] == 3
+    location_ids = hierarchy.loc[is_level_3, 'location_id'].to_list()
+    ihme_loc_ids = hierarchy.loc[is_level_3, 'ihme_loc_id'].to_list()
 
     pm_data = PopulationModelData()
 
@@ -132,6 +142,7 @@ def worker(
     logger.info('PREPARING METADATA')
     pm_data = PopulationModelData()
     model_spec = pm_data.load_model_specification(resolution, version)
+    modeling_frame = pm_data.load_modeling_frame(resolution)
     output_root = pm_data.root / 'country_data' / f'{resolution}m' / version
 
     hierarchy = pd.read_parquet(
@@ -141,7 +152,7 @@ def worker(
 
     output_path = output_root / ihme_loc_id / f'{time_point}.tif'
     if not output_path.exists():
-        logger.info('LOADING GEOMETRY AND CREATING BUFFERED GEOMETRY')
+        logger.info('LOADING AND CREATING BUFFERED GEOMETRY')
         shapes = gpd.read_parquet(
             "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/shapes_lsae_1285_a0.parquet"
         )
@@ -154,10 +165,17 @@ def worker(
         )
 
         logger.info('LOADING COMPILED COGs')
-        raster = rt.load_raster(
-            pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
-            buffered_geometry.bounds,
-        ).clip(geometry).mask(geometry)
+        block_keys = modeling_frame.loc[modeling_frame.intersects(buffered_geometry), "block_key"].unique().tolist()
+
+        raster = []
+        for block_key in tqdm.tqdm(block_keys, total=len(block_keys)):
+            block_raster = pm_data.load_raked_prediction(
+                block_key, time_point, model_spec
+            ).clip(geometry).mask(geometry)
+            if location_id in ANTI_MERIDIAN_LOCATION_IDS:
+                block_raster = block_raster.to_crs(CRSES["equal_area_anti_meridian"].to_pyproj())
+            raster.append(block_raster)
+        raster = rt.merge(raster)
 
         logger.info('SAVING COUNTRY RASTER')
         save_raster(raster, output_path)

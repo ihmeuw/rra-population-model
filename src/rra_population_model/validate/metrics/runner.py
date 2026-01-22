@@ -157,6 +157,7 @@ def metrics(
     pm_data = PopulationModelData(output_dir)
 
     time_points = pm_data.list_raked_prediction_time_points(resolution, version)
+    time_points = [time_point for time_point in time_points if time_point.endswith("q1")]
     if time_point not in time_points:
         msg = (
             f"Time point {time_point} not found in {resolution} {version}.\n"
@@ -182,6 +183,7 @@ def metrics(
         node_args={
             "block-key": block_keys,
             # "version": versions,
+            # "time-point": time_points,
         },
         task_args={
             "version": version,

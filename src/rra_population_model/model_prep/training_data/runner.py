@@ -98,6 +98,7 @@ def training_data_main(
                     .loc[(tile_gdf['census_time_point'] == data_time_point) & (tile_gdf['time_point'] == data_time_point)]
                     .set_index(['admin_id', 'pixel_id'])
                     .loc[:, f'pixel_occupancy_rate_{denominator}']
+                    .clip(0, np.inf)
                 )
                 pixel_built = (
                     tile_gdf

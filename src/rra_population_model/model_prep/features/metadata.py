@@ -12,7 +12,7 @@ from rra_population_model.data import (
     PopulationModelData,
 )
 
-REFERENCE_BUILDING_VERSION = "microsoft_v7_1"
+REFERENCE_BUILDING_VERSION = "microsoft_v8"
 
 
 class FeatureMetadata(NamedTuple):

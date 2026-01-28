@@ -4,9 +4,11 @@ from loguru import logger
 from typing import List
 import tqdm
 
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 import rasterra as rt
+from affine import Affine
 
 from jobmon.client.tool import Tool
 import uuid
@@ -20,18 +22,17 @@ from rra_population_model.data import (
 )
 from rra_population_model.constants import CRSES
 
-ANTI_MERIDIAN_LOCATION_IDS = [
-    102,  # United States
+COG_LOCATION_IDS = [
+    ## countries that are flagged by the near-antimeridian logic but create problems
+    23,   # Kiribati
+    413,  # Tokelau
 ]
 
 
 def workflow(
-    location_ids: List[int],
-    ihme_loc_ids: List[str],
-    time_points: List[str],
+    location_id_time_points: List[str],
     resolution: str,
     version: str,
-    output_root: Path,
 ):
     wf_uuid = uuid.uuid4()
 
@@ -45,9 +46,8 @@ def workflow(
     task_template = tool.get_task_template(
         default_compute_resources={
             'queue': 'all.q',
-            'cores': 2,
-            'memory': '2G',
-            'runtime': '1m',
+            'memory': '5G',
+            'runtime': '3m',
             # 'stdout': str(version_root / '_diagnostics' / 'logs' / 'output'),
             # 'stderr': str(version_root / '_diagnostics' / 'logs' / 'error'),
             'project': 'proj_rapidresponse',
@@ -58,34 +58,29 @@ def workflow(
         command_template=f'{shutil.which("python")}'
                          f' {Path(__file__)}'
                          ' worker'
-                         ' {location_id}'
-                         ' {time_point}'
+                         ' {location_id_time_point}'
                          ' {resolution}'
                          ' {version}',
-        node_args=['location_id', 'time_point'],
+        node_args=['location_id_time_point'],
         task_args=['resolution', 'version'],
         op_args=[],
     )
 
     ## compile tasks
     tasks = []
-    for location_id, ihme_loc_id in zip(location_ids, ihme_loc_ids):
-        for time_point in time_points:
-            output_path = output_root / ihme_loc_id / f'{time_point}.tif'
-            if not output_path.exists():
-                tasks.append(
-                    task_template.create_task(
-                        max_attempts=7,
-                        resource_scales={
-                            'memory':  iter([20    , 60     , 100    , 200    , 700    , 900    ]),
-                            'runtime': iter([5 * 60, 10 * 60, 15 * 60, 30 * 60, 60 * 60, 90 * 60]),
-                        },
-                        location_id=location_id,
-                        time_point=time_point,
-                        resolution=resolution,
-                        version=version,
-                    )
-                )
+    for location_id_time_point in location_id_time_points:
+        tasks.append(
+            task_template.create_task(
+                max_attempts=6,
+                resource_scales={
+                    'memory':  iter([50    , 100    , 200    , 500     , 800     ]),
+                    'runtime': iter([4 * 60, 10 * 60, 20 * 60, 240 * 60, 360 * 60]),
+                },
+                location_id_time_point=location_id_time_point,
+                resolution=resolution,
+                version=version,
+            )
+        )
 
     workflow.add_tasks(tasks)
     workflow.bind()
@@ -118,25 +113,60 @@ def runner(resolution: str, version: str):
         version,
         measure="population",
     )
-    time_points = list(sorted(time_points))[1:]
+    time_points = [time_point for time_point in list(sorted(time_points)) if time_point != "2020q1"]
 
+    possible = 0
+    running = 0
+    location_id_time_points = []
+    for location_id, ihme_loc_id in zip(location_ids, ihme_loc_ids):
+        for time_point in time_points:
+            possible += 1
+            output_path = output_root / ihme_loc_id / f'{time_point}.tif'
+            if not output_path.exists():
+                location_id_time_points.append(f'{location_id}-{time_point}')
+                running += 1
+    complete = possible - running
+
+    logger.info(f'Running {running} location-time points ({complete} already complete).')
     workflow(
-        location_ids=location_ids,
-        ihme_loc_ids=ihme_loc_ids,
-        time_points=time_points,
+        location_id_time_points=location_id_time_points,
         resolution=resolution,
         version=version,
-        output_root=output_root,
+    )
+
+
+def shift_to_antimeridian(
+    raster: rt.RasterArray,
+) -> rt.RasterArray:
+    """Shift a global raster by half the world width (no resampling)."""
+    if raster.crs != CRSES["equal_area"].code:
+        raise ValueError("Transformation being applied to world cylindrical (equal area) only.")
+    shift_px = CRSES["equal_area"].bounds[0]  # raster.width // 2
+    target_crs = CRSES["equal_area_anti_meridian"].to_pyproj()
+
+    if np.ptp(np.array(raster.bounds)[:2]) >= np.abs(shift_px) * 1.5:
+        raise ValueError("Raster crosses antimeridian")
+
+    # Update affine transform x origin by half the world width
+    t = raster.transform
+    new_transform = Affine(t.a, t.b, t.c - shift_px, t.d, t.e, t.f)
+
+    return rt.RasterArray(
+        raster.to_numpy(),
+        transform=new_transform,
+        crs=target_crs,
+        no_data_value=raster.no_data_value,
     )
 
 
 def worker(
-    location_id: int,
-    time_point: str,
+    location_id_time_point: str,
     resolution: str,
     version: str,
     buffer_size: int = 5000,
 ):
+    location_id, time_point = location_id_time_point.split('-')
+    location_id = int(location_id)
     logger.info(f'{location_id} - {time_point}')
 
     logger.info('PREPARING METADATA')
@@ -164,18 +194,36 @@ def worker(
             .union_all()
         )
 
-        logger.info('LOADING COMPILED COGs')
-        block_keys = modeling_frame.loc[modeling_frame.intersects(buffered_geometry), "block_key"].unique().tolist()
+        if location_id in COG_LOCATION_IDS:
+            near_antimeridian = False
+        else:
+            block_key_x_max = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:])).max()
+            modeling_frame = modeling_frame.loc[modeling_frame.intersects(buffered_geometry)]
+            block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
+            boundary_blocks = 8
+            near_antimeridian = (
+                (block_key_x <= boundary_blocks)
+                | (block_key_x >= block_key_x_max - boundary_blocks)
+            ).any()
 
-        raster = []
-        for block_key in tqdm.tqdm(block_keys, total=len(block_keys)):
-            block_raster = pm_data.load_raked_prediction(
-                block_key, time_point, model_spec
+        if near_antimeridian:
+            logger.info('LOADING RAKED PREDICTION BLOCKS AND REPROJECTING DUE TO ANTIMERIDIAN PROXIMITY')
+            block_keys = modeling_frame["block_key"].unique().tolist()
+            raster = []
+            for block_key in tqdm.tqdm(block_keys, total=len(block_keys)):
+                block_raster = pm_data.load_raked_prediction(
+                    block_key, time_point, model_spec
+                )
+                block_raster = block_raster.clip(geometry).mask(geometry)
+                block_raster = shift_to_antimeridian(block_raster)
+                raster.append(block_raster)
+            raster = rt.merge(raster)
+        else:
+            logger.info('LOADING COMPILED COGs')
+            raster = rt.load_raster(
+                pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
+                buffered_geometry.bounds,
             ).clip(geometry).mask(geometry)
-            if location_id in ANTI_MERIDIAN_LOCATION_IDS:
-                block_raster = block_raster.to_crs(CRSES["equal_area_anti_meridian"].to_pyproj())
-            raster.append(block_raster)
-        raster = rt.merge(raster)
 
         logger.info('SAVING COUNTRY RASTER')
         save_raster(raster, output_path)
@@ -191,8 +239,7 @@ if __name__ == '__main__':
         )
     elif sys.argv[1] == 'worker':
         worker(
-            location_id=int(sys.argv[2]),
-            time_point=sys.argv[3],
-            resolution=sys.argv[4],
-            version=sys.argv[5],
+            location_id_time_point=sys.argv[2],
+            resolution=sys.argv[3],
+            version=sys.argv[4],
         )

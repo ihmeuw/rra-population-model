@@ -61,17 +61,17 @@ BUILT_VERSIONS = {
             # "nonresidential_volume",
         ],
     ),
-    "microsoft_v7_1": BuiltVersion(
-        provider="microsoft",
-        version="v7_1",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
-        ][1:-2],
-        measures=[
-            "density",
-            "height",
-        ],
-    ),
+    # "microsoft_v7_1": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7_1",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
+    #     ][1:-2],
+    #     measures=[
+    #         "density",
+    #         "height",
+    #     ],
+    # ),
     "microsoft_v8": BuiltVersion(
         provider="microsoft",
         version="v8",

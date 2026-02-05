@@ -24,8 +24,7 @@ from rra_population_model.constants import CRSES
 
 COG_LOCATION_IDS = [
     ## countries that are flagged by the near-antimeridian logic but create problems
-    23,   # Kiribati
-    413,  # Tokelau
+    # 413,  # Tokelau
 ]
 
 
@@ -135,21 +134,26 @@ def runner(resolution: str, version: str):
     )
 
 
-def shift_to_antimeridian(
-    raster: rt.RasterArray,
-) -> rt.RasterArray:
+def shift_to_antimeridian(raster: rt.RasterArray) -> rt.RasterArray:
     """Shift a global raster by half the world width (no resampling)."""
     if raster.crs != CRSES["equal_area"].code:
         raise ValueError("Transformation being applied to world cylindrical (equal area) only.")
-    shift_px = CRSES["equal_area"].bounds[0]  # raster.width // 2
+    shift_px = np.abs(CRSES["equal_area"].bounds[0])
+    shift_decimals = len(str(shift_px).split('.')[-1])
+    if shift_decimals != 2:
+        raise ValueError(f"Expected 2 decimals in CRS width, got {shift_decimals}")
     target_crs = CRSES["equal_area_anti_meridian"].to_pyproj()
 
-    if np.ptp(np.array(raster.bounds)[:2]) >= np.abs(shift_px) * 1.5:
-        raise ValueError("Raster crosses antimeridian")
+    if raster.bounds[0] < 0 and raster.bounds[1] > 0:
+        raise ValueError("Crosses prime meridian")
 
     # Update affine transform x origin by half the world width
     t = raster.transform
-    new_transform = Affine(t.a, t.b, t.c - shift_px, t.d, t.e, t.f)
+    if t.c < 0:
+        t_c = np.round(shift_px + t.c, shift_decimals)
+    else:
+        t_c = np.round(t.c - shift_px, shift_decimals)
+    new_transform = Affine(t.a, t.b, float(t_c), t.d, t.e, t.f)
 
     return rt.RasterArray(
         raster.to_numpy(),
@@ -180,55 +184,53 @@ def worker(
     )
     ihme_loc_id = hierarchy.set_index('location_id').loc[location_id, 'ihme_loc_id']
 
-    output_path = output_root / ihme_loc_id / f'{time_point}.tif'
-    if not output_path.exists():
-        logger.info('LOADING AND CREATING BUFFERED GEOMETRY')
-        shapes = gpd.read_parquet(
-            "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/shapes_lsae_1285_a0.parquet"
-        )
-        geometry = shapes.to_crs("ESRI:54034").set_index('location_id').loc[location_id, 'geometry']
-        buffered_geometry = (
-            gpd.GeoSeries(geometry)
-            .explode(index_parts=True)
-            .convex_hull.buffer(buffer_size)
-            .union_all()
-        )
+    logger.info('LOADING AND CREATING BUFFERED GEOMETRY')
+    shapes = gpd.read_parquet(
+        "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/shapes_lsae_1285_a0.parquet"
+    )
+    geometry = shapes.to_crs("ESRI:54034").set_index('location_id').loc[location_id, 'geometry']
+    buffered_geometry = (
+        gpd.GeoSeries(geometry)
+        .explode(index_parts=True)
+        .convex_hull.buffer(buffer_size)
+        .union_all()
+    )
 
-        if location_id in COG_LOCATION_IDS:
-            near_antimeridian = False
-        else:
-            block_key_x_max = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:])).max()
-            modeling_frame = modeling_frame.loc[modeling_frame.intersects(buffered_geometry)]
-            block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
-            boundary_blocks = 8
-            near_antimeridian = (
-                (block_key_x <= boundary_blocks)
-                | (block_key_x >= block_key_x_max - boundary_blocks)
-            ).any()
-
-        if near_antimeridian:
-            logger.info('LOADING RAKED PREDICTION BLOCKS AND REPROJECTING DUE TO ANTIMERIDIAN PROXIMITY')
-            block_keys = modeling_frame["block_key"].unique().tolist()
-            raster = []
-            for block_key in tqdm.tqdm(block_keys, total=len(block_keys)):
-                block_raster = pm_data.load_raked_prediction(
-                    block_key, time_point, model_spec
-                )
-                block_raster = block_raster.clip(geometry).mask(geometry)
-                block_raster = shift_to_antimeridian(block_raster)
-                raster.append(block_raster)
-            raster = rt.merge(raster)
-        else:
-            logger.info('LOADING COMPILED COGs')
-            raster = rt.load_raster(
-                pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
-                buffered_geometry.bounds,
-            ).clip(geometry).mask(geometry)
-
-        logger.info('SAVING COUNTRY RASTER')
-        save_raster(raster, output_path)
+    if location_id in COG_LOCATION_IDS:
+        near_antimeridian = False
     else:
-        logger.info('COUNTRY RASTER ALREADY EXISTS')
+        block_key_x_max = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:])).max()
+        modeling_frame = modeling_frame.loc[modeling_frame.intersects(buffered_geometry)]
+        block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
+        boundary_blocks = 8
+        near_antimeridian = (
+            (block_key_x <= boundary_blocks)
+            | (block_key_x >= block_key_x_max - boundary_blocks)
+        ).any()
+
+    if near_antimeridian:
+        logger.info('LOADING RAKED PREDICTION BLOCKS AND REPROJECTING DUE TO ANTIMERIDIAN PROXIMITY')
+        block_keys = modeling_frame["block_key"].unique().tolist()
+
+        raster = []
+        for block_key in tqdm.tqdm(block_keys, total=len(block_keys)):
+            block_raster = pm_data.load_raked_prediction(
+                block_key, time_point, model_spec
+            )
+            block_raster = block_raster.clip(geometry).mask(geometry)
+            block_raster = shift_to_antimeridian(block_raster)
+            raster.append(block_raster)
+        raster = rt.merge(raster)
+    else:
+        logger.info('LOADING COMPILED COGs')
+        raster = rt.load_raster(
+            pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
+            buffered_geometry.bounds,
+        ).clip(geometry).mask(geometry)
+
+    logger.info('SAVING COUNTRY RASTER')
+    output_path = output_root / ihme_loc_id / f'{time_point}.tif'
+    save_raster(raster, output_path)
 
 
 if __name__ == '__main__':

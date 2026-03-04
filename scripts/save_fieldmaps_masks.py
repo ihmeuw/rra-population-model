@@ -14,7 +14,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import rra_population_model.constants as pmc
 from rra_population_model.data import PopulationModelData, save_raster
 
-FIELDMAPS_ROOT = pmc.MODEL_ROOT / 'admin-inputs' / 'itu-masks' / 'fieldmaps'
+ITU_MASKS_ROOT = pmc.MODEL_ROOT / 'admin-inputs' / 'itu-masks'
 FIELDMAPS_FILES = {
     'humanitarian': 'adm1_polygons_UNCOD_geoBoundaries.parquet',
     'open': 'adm1_polygons_geoBoundaries.parquet',
@@ -22,9 +22,9 @@ FIELDMAPS_FILES = {
 
 
 def load_data(dataset_name: str, pm_data: PopulationModelData):
-    itu_caribbean = pd.read_csv(FIELDMAPS_ROOT / 'datasets' / 'itu_caribbean.csv')
+    itu_caribbean = pd.read_csv(ITU_MASKS_ROOT / 'datasets' / 'itu_caribbean.csv')
 
-    data = gpd.read_parquet(FIELDMAPS_ROOT / 'datasets' / FIELDMAPS_FILES[dataset_name])
+    data = gpd.read_parquet(ITU_MASKS_ROOT / 'datasets' / FIELDMAPS_FILES[dataset_name])
 
     data_caribbean = data.loc[data['iso_2'].isin(itu_caribbean['Iso2Code'])]
     data_caribbean = data_caribbean.loc[
@@ -38,6 +38,8 @@ def load_data(dataset_name: str, pm_data: PopulationModelData):
         raise ValueError(f"Missing the following countries: {','.join(missing)}")
 
     itu_iso3s = pm_data.list_itu_iso3s()
+    if "RWA" not in itu_iso3s:
+        itu_iso3s += ["RWA"]
     caribbean_iso3s = data_caribbean.index.get_level_values('iso_3').to_list()
     itu_iso3s = [i for i in itu_iso3s if i not in caribbean_iso3s]
 
@@ -110,7 +112,7 @@ def main():
 
     data_humanitarian = load_data("humanitarian", pm_data)
 
-    with PdfPages(FIELDMAPS_ROOT / "datasets" / "mask_update.pdf") as pdf:
+    with PdfPages(ITU_MASKS_ROOT / "datasets" / "mask_update.pdf") as pdf:
         for iso3 in tqdm.tqdm(data_humanitarian.index.get_level_values('iso_3'), total=len(data_humanitarian)):
             template_mask, raster_mask = polygon_to_raster_mask(
                 iso3=iso3,
@@ -118,7 +120,7 @@ def main():
                 resolution=100,
                 pm_data=pm_data,
             )
-            save_raster(raster_mask, FIELDMAPS_ROOT / f"{iso3}.tif")
+            save_raster(raster_mask, ITU_MASKS_ROOT / f"{iso3}.tif")
 
             if template_mask is not None:
                 diff = rt.RasterArray(

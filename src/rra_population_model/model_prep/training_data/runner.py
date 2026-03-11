@@ -225,7 +225,6 @@ def training_data(
 
     print("Building arg list")
     to_run = utils.build_arg_list(resolution, pm_data, purpose)
-    to_run = [i for i in to_run if i[1].startswith('202')]
 
     if purpose == "training":
         to_run = [

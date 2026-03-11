@@ -134,6 +134,11 @@ ALL_TIME_POINTS = sorted(
     | {f"{y}q1" for y in range(1975, 2026)}
 )
 
+MODELING_TIME_POINTS = [
+    tp for tp in BUILT_VERSION_TIME_POINTS
+    if int(tp.split("q")[0]) >= 2020
+]
+
 
 class CRS(BaseModel):
     name: str

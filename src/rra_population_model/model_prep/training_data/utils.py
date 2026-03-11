@@ -110,7 +110,7 @@ def build_arg_list(
                 pd.concat([
                     tile_keys_and_times, pd.Series(time_point, name='time_point', index=tile_keys_and_times.index)
                 ], axis=1)
-                for time_point in pmc.BUILT_VERSION_TIME_POINTS
+                for time_point in pmc.MODELING_TIME_POINTS
             ]
         )
         tile_keys_and_times['year'] = (

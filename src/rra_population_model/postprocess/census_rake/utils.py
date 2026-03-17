@@ -11,6 +11,8 @@ from shapely import set_precision
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
+STEP_LIMIT = 3
+
 
 def safe_divide(
     a: npt.NDArray[np.floating[Any]] | pd.DataFrame,
@@ -245,7 +247,6 @@ def generate_raking_factors(
     overlay_gdf: gpd.GeoDataFrame,
     census_time_point: str,
     model_time_points: list[str],
-    step_limit: float = 3.,
 ) -> gpd.GeoDataFrame:
     for model_time_point in model_time_points:
         overlay_gdf[f"covered_pixel_population_{model_time_point}"] = overlay_gdf[f"pixel_population_{model_time_point}"] * overlay_gdf["pixel_coverage"]
@@ -273,7 +274,7 @@ def generate_raking_factors(
             overlay_gdf["raking_factor_decrease"] = (
                 overlay_gdf[f"shape_population_{prev_model_time_point}"]
                 *
-                (1 / (step_limit * overlay_gdf[f"shape_population_{model_time_point}"]))
+                (1 / (STEP_LIMIT * overlay_gdf[f"shape_population_{model_time_point}"]))
                 *
                 overlay_gdf[f"raking_factor_{prev_model_time_point}"]
             )
@@ -281,7 +282,7 @@ def generate_raking_factors(
             overlay_gdf["raking_factor_increase"] = (
                 overlay_gdf[f"shape_population_{prev_model_time_point}"]
                 *
-                (step_limit / overlay_gdf[f"shape_population_{model_time_point}"])
+                (STEP_LIMIT / overlay_gdf[f"shape_population_{model_time_point}"])
                 *
                 overlay_gdf[f"raking_factor_{prev_model_time_point}"]
             )

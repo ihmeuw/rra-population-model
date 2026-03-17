@@ -46,42 +46,23 @@ def get_intersecting_admins(
 
 def get_data_locations_and_years(
     pm_data: PopulationModelData,
-    purpose: str,
 ) -> list[tuple[str, str, str]]:
     """Get the locations and years for which we have training data."""
     available_census_years = pm_data.list_census_data()
-    if purpose == 'training':
-        available_census_years = [
-            i for i in available_census_years
-            if i[0] in ["MEX", "USA"] and i[1] == "2020"
-        ]
-    elif purpose == 'inference':
-        inference_countries = [
-            # "DNK",  # Denmark
-            # "FIN",  # Finland
-            # "FRA",  # France
-            "MEX",  # Mexico
-            # "MYS",  # Malaysia
-            # "PAN",  # Panama
-            # "SWE",  # Sweden
-            # "TUR",  # Turkey
-            "USA",  # United States
-        ]
-        available_census_years = [
-            i for i in available_census_years
-            if i[0] in inference_countries and i[1] == "2020"
-        ]
+    available_census_years = [
+        i for i in available_census_years
+        if i[0] in ["MEX", "USA"] and i[1] == "2020"
+    ]
     return available_census_years
 
 
 def build_arg_list(
     resolution: str,
     pm_data: PopulationModelData,
-    purpose: str,
     buffer_size: int | float = 5000,
 ) -> list[tuple[str, str, str]]:
     modeling_frame = pm_data.load_modeling_frame(resolution)
-    data_years = get_data_locations_and_years(pm_data, purpose)
+    data_years = get_data_locations_and_years(pm_data)
 
     tile_keys_and_times = []
     for iso3, year, quarter in data_years:
@@ -102,35 +83,7 @@ def build_arg_list(
                 )
             )
     tile_keys_and_times = pd.concat(tile_keys_and_times)
-    if purpose == 'training':
-        tile_keys_and_times['time_point'] = tile_keys_and_times['iso3_time_point']
-    elif purpose == 'inference':
-        tile_keys_and_times = pd.concat(
-            [
-                pd.concat([
-                    tile_keys_and_times, pd.Series(time_point, name='time_point', index=tile_keys_and_times.index)
-                ], axis=1)
-                for time_point in pmc.MODELING_TIME_POINTS
-            ]
-        )
-        tile_keys_and_times['year'] = (
-            tile_keys_and_times['time_point'].str.split('q').str[0].astype(int)
-            + (tile_keys_and_times['time_point'].str.split('q').str[1].astype(int) - 1) / 4
-        )
-        tile_keys_and_times['iso3_year'] = (
-            tile_keys_and_times['iso3_time_point'].str.split('q').str[0].astype(int)
-            + (tile_keys_and_times['iso3_time_point'].str.split('q').str[1].astype(int) - 1) / 4
-        )
-        tile_keys_and_times['distance'] = (tile_keys_and_times['year'] - tile_keys_and_times['iso3_year']).abs()
-        tile_keys_and_times = (
-            tile_keys_and_times
-            .sort_values('distance')
-            .groupby(['tile_key', 'time_point', 'iso3'])['iso3_time_point']
-            .first()
-            .reset_index(['time_point', 'iso3'])
-        )
-    else:
-        raise ValueError(f'Unexpected purpose: {purpose}')
+    tile_keys_and_times['time_point'] = tile_keys_and_times['iso3_time_point']
     tile_keys_and_times['iso3_time_point'] = (
         tile_keys_and_times['iso3'] + ':' + tile_keys_and_times['iso3_time_point']
     )

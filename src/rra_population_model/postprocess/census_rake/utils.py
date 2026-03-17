@@ -158,7 +158,6 @@ def generate_census_inputs(pm_data: PopulationModelData) -> tuple[gpd.GeoDataFra
             columns={
                 "shape_id": "task_parent_id",
                 "admin_level": "task_parent_level",
-                "geometry": "task_parent_geometry",
             },
         )
         parent_admins = parent_admins.set_index(["iso3", "task_parent_id", "task_parent_level"])
@@ -188,13 +187,12 @@ def process_census_data(
     task_map: gpd.GeoSeries,
     census_time_point: str,
     model_time_points: list[str],
-    buffer_size: int = 1000,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, rt.RasterArray, list[rt.RasterArray]]:
     modeling_frame = pm_data.load_modeling_frame(resolution)
     model_spec = pm_data.load_model_specification(resolution, version)
+    buffer_size = int(resolution) * 5
 
     census_data = pm_data.load_census_data(task_map["iso3"], census_time_point.split("q")[0])
-    # parent_geometry = census_data.loc[census_data["shape_id"] == task_map["task_parent_id"]].geometry
     buffered_parent_geometry = census_data.loc[census_data["shape_id"] == task_map["task_parent_id"]].geometry.buffer(buffer_size)
 
     census_data = census_data.loc[
@@ -220,84 +218,160 @@ def process_census_data(
         .tolist()
     )
 
-    raw_prediction = rt.merge([
-        pm_data.load_raw_prediction(block_key, census_time_point, model_spec)
-        for block_key in block_keys
-    ])
-    raw_prediction = raw_prediction.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
-    raw_gdf = (
-        raw_prediction.to_gdf()
-        .reset_index()
-        .rename(columns={"value": "pixel_population", "index": "pixel_id"})
-        .sort_values("pixel_id")
-    )
-    raw_gdf["geometry"] = raw_gdf.geometry.map(lambda g: set_precision(g, 0.001))
-    raw_gdf["pixel_area"] = raw_gdf.area
-
-    scalar_rasters = []
+    prediction_data: pd.DataFrame | None = None
     for model_time_point in model_time_points:
-        scalar_prediction = rt.merge([
+        prediction_raster = rt.merge([
             pm_data.load_raw_prediction(block_key, model_time_point, model_spec)
             for block_key in block_keys
         ])
-        scalar_prediction = scalar_prediction.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
-        scalar_prediction = safe_divide(scalar_prediction.to_numpy(), raw_prediction.to_numpy())
-        scalar_rasters.append(
-            rt.RasterArray(
-                data=scalar_prediction,
-                transform=raw_prediction.transform,
-                crs=raw_prediction.crs,
-                no_data_value=np.nan,
+        prediction_raster = prediction_raster.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
+        if prediction_data is None:
+            prediction_data = (
+                prediction_raster
+                .to_gdf()
+                .rename(columns={"value": f"pixel_population_{model_time_point}"})
             )
-        )
+        else:
+            prediction_data[f"pixel_population_{model_time_point}"] = prediction_raster.to_numpy().flatten()
+    prediction_data.index.name = "pixel_id"
+    prediction_data = prediction_data.sort_index().reset_index()
+    prediction_data["geometry"] = prediction_data.geometry.map(lambda g: set_precision(g, 0.001))
+    prediction_data["pixel_area"] = prediction_data.area
 
-    return census_data, raw_gdf, raw_prediction, scalar_rasters
+    return census_data, prediction_data, prediction_raster
+
+
+def generate_raking_factors(
+    overlay_gdf: gpd.GeoDataFrame,
+    census_time_point: str,
+    model_time_points: list[str],
+    step_limit: float = 3.,
+) -> gpd.GeoDataFrame:
+    for model_time_point in model_time_points:
+        overlay_gdf[f"covered_pixel_population_{model_time_point}"] = overlay_gdf[f"pixel_population_{model_time_point}"] * overlay_gdf["pixel_coverage"]
+        overlay_gdf[f"shape_population_{model_time_point}"] = overlay_gdf.groupby("shape_id")[f"covered_pixel_population_{model_time_point}"].transform(sum)
+
+    overlay_gdf[f"raking_factor_{census_time_point}"] = safe_divide(
+        overlay_gdf["population_total"].astype(np.float32),
+        overlay_gdf[f"shape_population_{census_time_point}"],
+    )
+
+    distances = [
+        (int(census_time_point.split("q")[0]) + int(census_time_point.split("q")[1]) / 4)
+        -
+        (int(model_time_point.split("q")[0]) + int(model_time_point.split("q")[1]) / 4)
+        for model_time_point in model_time_points
+    ]
+    pre_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points)) if i[0] >= 0]
+    post_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points), reverse=True) if i[0] <= 0]
+    for sorted_model_time_points in [pre_sorted_model_time_points, post_sorted_model_time_points]:
+        for i in range(1, len(sorted_model_time_points)):
+            model_time_point = sorted_model_time_points[i]
+            prev_model_time_point = sorted_model_time_points[i-1]
+
+            # 1) calculate raking factors with constrained increase/decrease allowed from previous time step
+            overlay_gdf["raking_factor_decrease"] = (
+                overlay_gdf[f"shape_population_{prev_model_time_point}"]
+                *
+                (1 / (step_limit * overlay_gdf[f"shape_population_{model_time_point}"]))
+                *
+                overlay_gdf[f"raking_factor_{prev_model_time_point}"]
+            )
+            overlay_gdf["raking_factor_decrease"] = overlay_gdf["raking_factor_decrease"].clip(-np.inf, 1)
+            overlay_gdf["raking_factor_increase"] = (
+                overlay_gdf[f"shape_population_{prev_model_time_point}"]
+                *
+                (step_limit / overlay_gdf[f"shape_population_{model_time_point}"])
+                *
+                overlay_gdf[f"raking_factor_{prev_model_time_point}"]
+            )
+            overlay_gdf["raking_factor_increase"] = overlay_gdf["raking_factor_increase"].clip(1, np.inf)
+
+            # 2) splice together constrained raking factors based on whether data time point is increasing or decreasing
+            decrease = (
+                overlay_gdf[f"shape_population_{model_time_point}"]
+                <
+                overlay_gdf[f"shape_population_{prev_model_time_point}"]
+            )
+            overlay_gdf[f"raking_factor_{model_time_point}"] = pd.concat([
+                overlay_gdf.loc[decrease, ["raking_factor_decrease", f"raking_factor_{prev_model_time_point}"]].max(axis=1),
+                overlay_gdf.loc[~decrease, ["raking_factor_increase", f"raking_factor_{prev_model_time_point}"]].min(axis=1),
+            ]).sort_index()
+
+            # 3) replace infs with previous time point OR try directly calculating if previous is also inf
+            overlay_gdf.loc[
+                np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
+                f"raking_factor_{model_time_point}"
+            ] = overlay_gdf[f"raking_factor_{prev_model_time_point}"]
+            overlay_gdf["raking_factor_direct"] = safe_divide(
+                overlay_gdf["population_total"].astype(np.float32),
+                overlay_gdf[f"shape_population_{model_time_point}"],
+            )
+            overlay_gdf.loc[
+                np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
+                f"raking_factor_{model_time_point}"
+            ] = overlay_gdf["raking_factor_direct"]
+
+    for model_time_point in model_time_points:
+        overlay_gdf.loc[
+            np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
+            f"raking_factor_{model_time_point}"
+        ] = 0
+
+    spatial_cols = ["shape_id", "pixel_id", "isection_area", "pixel_area", "pixel_coverage"]
+    covered_pixel_cols = [f"covered_pixel_population_{model_time_point}" for model_time_point in model_time_points]
+    raking_factor_cols = [f"raking_factor_{model_time_point}" for model_time_point in model_time_points]
+    overlay_gdf = overlay_gdf.loc[:, spatial_cols + covered_pixel_cols + raking_factor_cols]
+
+    return overlay_gdf
 
 
 def rake(
     census_data: gpd.GeoDataFrame,
-    raw_gdf: gpd.GeoDataFrame,
-    raw_prediction: rt.RasterArray,
+    prediction_data: gpd.GeoDataFrame,
+    template_raster: rt.RasterArray,
+    census_time_point: str,
+    model_time_points: list[str],
 ) -> rt.RasterArray:
     overlay_gdf = (
         census_data
         .overlay(
-            raw_gdf,
+            prediction_data,
             how="intersection",
             keep_geom_type=True,
         )
     )
 
     overlay_gdf["isection_area"] = overlay_gdf.area
-
     overlay_gdf["pixel_coverage"] = safe_divide(
         overlay_gdf["isection_area"],
         overlay_gdf["pixel_area"],
     )
-    overlay_gdf["covered_pixel_population"] = overlay_gdf["pixel_population"] * overlay_gdf["pixel_coverage"]
 
-    overlay_gdf["shape_pixel_population"] = overlay_gdf.groupby("shape_id")["covered_pixel_population"].transform(sum)
-    overlay_gdf["raking_factor"] = safe_divide(
-        overlay_gdf["population_total"].astype(np.float32),
-        overlay_gdf["shape_pixel_population"],
-    )
-    overlay_gdf["raked_pixel_population"] = overlay_gdf["covered_pixel_population"] * overlay_gdf["raking_factor"]
-
-    idx = np.arange(raw_prediction.size)
-    raked_population = (
-        overlay_gdf.groupby("pixel_id")["raked_pixel_population"]
-        .sum()
-        .sort_index()
-        .reindex(idx, fill_value=np.nan)
-        .to_numpy()
-        .astype(np.float32)
-        .reshape(raw_prediction.shape)
-    )
-    raked_raster = rt.RasterArray(
-        data=raked_population,
-        transform=raw_prediction.transform,
-        crs=raw_prediction.crs,
-        no_data_value=np.nan,
+    overlay_gdf = generate_raking_factors(
+        overlay_gdf, census_time_point, model_time_points
     )
 
-    return raked_raster
+    idx = np.arange(template_raster.size)
+    raked_rasters = []
+    for model_time_point in model_time_points:
+        overlay_gdf["raked_pixel_population"] = overlay_gdf[f"covered_pixel_population_{model_time_point}"] * overlay_gdf[f"raking_factor_{model_time_point}"]
+        raked_population = (
+            overlay_gdf.groupby("pixel_id")["raked_pixel_population"]
+            .sum()
+            .sort_index()
+            .reindex(idx, fill_value=np.nan)
+            .to_numpy()
+            .astype(np.float32)
+            .reshape(template_raster.shape)
+        )
+        raked_raster = rt.RasterArray(
+            data=raked_population,
+            transform=template_raster.transform,
+            crs=template_raster.crs,
+            no_data_value=np.nan,
+        )
+        raked_raster = trim_null_edges(raked_raster)
+        raked_rasters.append(raked_raster)
+
+    return raked_rasters

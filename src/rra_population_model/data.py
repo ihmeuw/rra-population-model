@@ -574,27 +574,6 @@ class PopulationModelData:
         touch(path, clobber=True)
         data.to_parquet(path)
 
-    def inference_data_root(self, resolution: str) -> Path:
-        return self.resolution_root(resolution) / "inference-data"
-
-    def tile_inference_data_root(self, resolution: str) -> Path:
-        return self.inference_data_root(resolution) / "tiles"
-
-    def save_tile_inference_data(
-        self,
-        resolution: str,
-        time_point: str,
-        tile_key: str,
-        tile_rasters: dict[str, rt.RasterArray],
-    ) -> None:
-        root = self.tile_inference_data_root(resolution) / time_point / tile_key
-        mkdir(root, exist_ok=True, parents=True)
-
-        for measure, raster in tile_rasters.items():
-            raster_path = root / f"{measure}.tif"
-            touch(raster_path, clobber=True)
-            save_raster(raster, raster_path)
-
     def load_people_per_structure(
         self, resolution: str, tile_key: str | None = None
     ) -> gpd.GeoDataFrame:
@@ -628,19 +607,6 @@ class PopulationModelData:
     ) -> rt.RasterArray:
         path = self.tile_training_data_root(resolution) / tile_key / f"{measure}.tif"
         return rt.load_raster(path)
-
-    def load_tile_inference_data(
-        self,
-        resolution: str,
-        tile_key: str,
-        time_point: str,
-        measure: str,
-    ) -> rt.RasterArray:
-        path = self.tile_inference_data_root(resolution) / time_point / tile_key / f"{measure}.tif"
-        if path.exists():
-            return rt.load_raster(path)
-        else:
-            return None
 
     def model_root(self, resolution: str) -> Path:
         return self.resolution_root(resolution) / "models"
@@ -826,14 +792,16 @@ class PopulationModelData:
         iso3: str,
         shape_id: str,
         time_point: str,
+        census_time_point: str,
         model_spec: "ModelSpecification",
     ) -> Path:
         resolution = model_spec.resolution
         version = model_spec.model_version
         return (
-            self.raw_predictions_root(resolution, version)
+            self.raked_census_root(resolution, version)
             / time_point
             / iso3
+            / census_time_point
             / f"{shape_id}.tif"
         )
 
@@ -843,9 +811,10 @@ class PopulationModelData:
         iso3: str,
         shape_id: str,
         time_point: str,
+        census_time_point: str,
         model_spec: "ModelSpecification",
     ) -> None:
-        path = self.raked_census_path(iso3, shape_id, time_point, model_spec)
+        path = self.raked_census_path(iso3, shape_id, time_point, census_time_point, model_spec)
         mkdir(path, parents=True, exist_ok=True)
         save_raster(raster, path)
 
@@ -854,25 +823,30 @@ class PopulationModelData:
         iso3: str,
         shape_id: str,
         time_point: str,
+        census_time_point: str,
         model_spec: "ModelSpecification",
     ) -> rt.RasterArray:
-        path = self.raked_census_path(iso3, shape_id, time_point, model_spec)
+        path = self.raked_census_path(iso3, shape_id, time_point, census_time_point, model_spec)
         return rt.load_raster(path)
 
-    def save_census_raking_inputs(
+    def save_census_raking_metadata(
         self,
         task_admins: gpd.GeoDataFrame,
         census_weights: pd.DataFrame,
+        census_tasks: pd.DataFrame,
         model_spec: "ModelSpecification",
     ) -> None:
         resolution = model_spec.resolution
         version = model_spec.model_version
-        root = self.model_version_root(resolution, version)
+        root = self.raked_census_root(resolution, version)
         task_admins.to_parquet(
-            root / "census_raking_task_admins.parquet"
+            root / "task_admins.parquet"
         )
         census_weights.to_parquet(
-            root / "census_raking_weights.parquet"
+            root / "weights.parquet"
+        )
+        census_tasks.to_parquet(
+            root / "tasks.parquet"
         )
 
     def load_census_raking_inputs(
@@ -881,14 +855,26 @@ class PopulationModelData:
     ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
         resolution = model_spec.resolution
         version = model_spec.model_version
-        root = self.model_version_root(resolution, version)
+        root = self.raked_census_root(resolution, version)
         task_admins = gpd.read_parquet(
-            root / "census_raking_task_admins.parquet"
+            root / "task_admins.parquet"
         )
         census_weights = pd.read_parquet(
-            root / "census_raking_weights.parquet"
+            root / "weights.parquet"
         )
         return task_admins, census_weights
+
+    def load_census_raking_tasks(
+        self,
+        model_spec: "ModelSpecification",
+    ) -> pd.DataFrame:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
+        root = self.raked_census_root(resolution, version)
+        census_tasks = pd.read_parquet(
+            root / "tasks.parquet"
+        )
+        return census_tasks
 
     def raking_factors_root(self, resolution: str, version: str) -> Path:
         return self.model_version_root(resolution, version) / "raking_factors"

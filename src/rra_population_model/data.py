@@ -342,6 +342,56 @@ class PopulationModelData:
         return gpd.read_parquet(path, **kwargs)
 
     @property
+    def comparison(self) -> Path:
+        return self.root / "comparison-inputs"
+
+    def comparison_data_path(
+        self,
+        source: str,
+        iso3: str,
+        year: str,
+    ) -> Path:
+        if not source.startswith("worldpop"):
+            raise ValueError("Expecting WorldPop")
+        return self.comparison / source / year / f"{iso3}_constrained_CN.tif"
+
+    def load_comparison_data(
+        self,
+        source: str,
+        iso3: str,
+        year: str,
+    ) -> rt.RasterArray:
+        path = self.comparison_data_path(source, iso3, year)
+        return rt.load_raster(path)
+
+    def comparison_validation_path(
+        self,
+        source: str,
+        iso3: str,
+        year: str,
+    ) -> Path:
+        return self.comparison / source / "validation" / f"{iso3}_{year}.parquet"
+
+    def save_comparison_validation(
+        self,
+        data: pd.DataFrame,
+        source: str,
+        iso3: str,
+        year: str,
+    ) -> None:
+        path = self.comparison_validation_path(source, iso3, year)
+        data.to_parquet(path)
+
+    def load_comparison_validation(
+        self,
+        source: str,
+        iso3: str,
+        year: str,
+    ) -> pd.DataFrame:
+        path = self.comparison_validation_path(source, iso3, year)
+        return pd.read_parquet(path)
+
+    @property
     def itu_masks(self) -> Path:
         return self.admin_inputs / "itu-masks"
 
@@ -790,7 +840,6 @@ class PopulationModelData:
     def raked_census_path(
         self,
         iso3: str,
-        shape_id: str,
         time_point: str,
         census_time_point: str,
         model_spec: "ModelSpecification",
@@ -802,7 +851,6 @@ class PopulationModelData:
             / time_point
             / iso3
             / census_time_point
-            / f"{shape_id}.tif"
         )
 
     def save_raked_census(
@@ -814,9 +862,9 @@ class PopulationModelData:
         census_time_point: str,
         model_spec: "ModelSpecification",
     ) -> None:
-        path = self.raked_census_path(iso3, shape_id, time_point, census_time_point, model_spec)
+        path = self.raked_census_path(iso3, time_point, census_time_point, model_spec)
         mkdir(path, parents=True, exist_ok=True)
-        save_raster(raster, path)
+        save_raster(raster, path / f"{shape_id}.tif")
 
     def load_raked_census(
         self,
@@ -826,8 +874,8 @@ class PopulationModelData:
         census_time_point: str,
         model_spec: "ModelSpecification",
     ) -> rt.RasterArray:
-        path = self.raked_census_path(iso3, shape_id, time_point, census_time_point, model_spec)
-        return rt.load_raster(path)
+        path = self.raked_census_path(iso3, time_point, census_time_point, model_spec)
+        return rt.load_raster(path / f"{shape_id}.tif")
 
     def save_census_raking_metadata(
         self,

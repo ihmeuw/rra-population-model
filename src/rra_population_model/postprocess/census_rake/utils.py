@@ -7,11 +7,170 @@ import numpy.typing as npt
 import pandas as pd
 import rasterra as rt
 from shapely import set_precision
+from shapely.geometry import MultiPolygon, GeometryCollection
+from shapely.ops import unary_union
 
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
 STEP_LIMIT = 3
+
+EXCLUSIONS = {
+    "ARG": [
+        "94021",  # South Atlantic Islands
+        "94028",  # Antarctica
+    ],
+}
+
+
+def calculate_tp_weights(census_years: pd.DataFrame) -> pd.DataFrame:
+    census_years = pd.concat(
+        [
+            pd.concat([
+                census_years, pd.Series(time_point, name="model_time_point", index=census_years.index)
+            ], axis=1)
+            for time_point in pmc.MODELING_TIME_POINTS
+        ]
+    )
+
+    census_years["distance"] = census_years.apply(
+        lambda x: 
+            (int(x["census_time_point"].split("q")[0]) + int(x["census_time_point"].split("q")[1]) / 4)
+            -
+            (int(x["model_time_point"].split("q")[0]) + int(x["model_time_point"].split("q")[1]) / 4)
+        ,
+        axis=1
+    )
+
+    census_weights = pd.concat(
+        [
+            (
+                census_years
+                .loc[census_years["distance"] <= 0]
+                .sort_values("distance", ascending=False)
+                .groupby(["iso3", "model_time_point"])[["census_time_point", "distance"]]
+                .first()
+                .reset_index()
+            ),
+            (
+                census_years
+                .loc[census_years["distance"] >= 0]
+                .sort_values("distance")
+                .groupby(["iso3", "model_time_point"])[["census_time_point", "distance"]]
+                .first()
+                .reset_index()
+            ),
+        ]
+    )
+    census_weights = census_weights.drop_duplicates().set_index(["iso3", "model_time_point"])
+    census_weights["distance"] = census_weights["distance"].abs()
+    census_weights["distance"] = census_weights.groupby(["iso3", "model_time_point"])["distance"].transform("sum") - census_weights["distance"]
+    census_weights["weight"] = (census_weights["distance"] / census_weights.groupby(["iso3", "model_time_point"])["distance"].transform("sum")).fillna(1)
+    census_weights = (
+        census_weights
+        .drop("distance", axis=1)
+        .set_index("census_time_point", append=True)
+        .sort_index()
+    )
+
+    return census_weights
+
+
+def get_task_admins(admins: gpd.GeoDataFrame, task_level: int) -> gpd.GeoDataFrame:
+    parent_admins = admins.loc[admins["admin_level"] == task_level]
+    parent_admins = parent_admins.rename(
+        columns={
+            "shape_id": "task_parent_id",
+            "admin_level": "task_parent_level",
+        },
+    )
+    parent_admins["area"] = parent_admins.area
+    bounds = parent_admins.bounds
+    parent_admins["bounds_area"] = (bounds['maxx'] - bounds['minx']) * (bounds['maxy'] - bounds['miny'])
+    parent_admins = (
+        parent_admins
+        .set_index(["iso3", "census_time_point", "task_parent_id", "task_parent_level"])
+        .loc[:, ["geometry", "area", "bounds_area"]]
+    )
+
+    admins = admins.loc[admins["admin_level"] == admins["admin_level"].max()]
+    admins["task_parent_id"] = admins["path_to_top_parent"].str.split(",").str[task_level]
+    admins["task_parent_level"] = task_level
+    admins = admins.loc[:, ["iso3", "census_time_point", "task_parent_id", "task_parent_level"]].value_counts().rename("most_detailed_units")
+    admins = parent_admins.join(admins)
+
+    return admins
+
+
+def generate_census_inputs(
+    pm_data: PopulationModelData,
+    start_level: int,
+    area_threshold: float,
+    admins_threshold: int,
+) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
+    available_census_years = pm_data.list_census_data()
+
+    keep_iso3s = [
+        "AUS", "ARG", "BRA", "CAN", "CZE", "ESP", "GRC", "ISL", 
+        "MDV", "MEX", "MLT", "MYS", "NPL", "PAN", "POL", "PRT",
+        "QAT", "ROU", "RWA", "SVK", "TLS", "TON", "TZA", "VUT",
+        "USA", "ZAF",
+    ]
+    data_years = [
+        i for i in available_census_years
+        if i[0] in keep_iso3s
+    ]
+
+    task_admins = []
+    census_years = []
+    for iso3, year, quarter in data_years:
+        print(f"Processing {iso3} {year}q{quarter}")
+        admins = pm_data.load_census_data(iso3, year)
+        admins["iso3"] = iso3
+        admins["census_time_point"] = f"{year}q{quarter}"
+        # if iso3 in ["AUS", "USA", "CAN", "CZE", "PRT"]:
+        #     start_level = 3
+        # else:
+        #     start_level = 2
+        task_level = min(start_level, admins["admin_level"].max())
+        admins = admins.loc[admins["admin_level"] >= task_level]
+        task_level_admins = get_task_admins(admins.copy(), task_level)
+        opt_check = task_level < admins["admin_level"].max()
+        while opt_check:
+            area_exceed = task_level_admins["bounds_area"] > area_threshold
+            admins_exceed = task_level_admins["most_detailed_units"] > admins_threshold
+            reduce_parents = (
+                task_level_admins
+                .loc[area_exceed | admins_exceed]
+                .index
+                .get_level_values("task_parent_id")
+                .tolist()
+            )
+            task_level_admins = task_level_admins.drop(reduce_parents, level="task_parent_id", errors="ignore")
+            admins[f"level_{task_level}_id"] = admins["path_to_top_parent"].str.split(",").str[task_level]
+            task_level_admins_supp = get_task_admins(
+                admins.loc[admins[f"level_{task_level}_id"].isin(reduce_parents)].copy(),
+                task_level + 1,
+            )
+            task_level_admins = pd.concat([task_level_admins, task_level_admins_supp])
+            task_level += 1
+            opt_check = (
+                task_level < admins["admin_level"].max()
+                and
+                area_exceed.sum() + admins_exceed.sum() > 0
+            )
+
+        task_level_admins = task_level_admins.drop(EXCLUSIONS.get(iso3, []), level="task_parent_id", errors="ignore")
+        task_admins.append(task_level_admins)
+        census_years.append(
+            pd.DataFrame({"census_time_point": f"{year}q{quarter}"}, index=pd.Index([iso3], name="iso3"))
+        )
+    task_admins = pd.concat(task_admins)
+    census_years = pd.concat(census_years)
+
+    census_weights = calculate_tp_weights(census_years)
+
+    return task_admins, census_weights
 
 
 def safe_divide(
@@ -82,104 +241,13 @@ def trim_null_edges(
     )
 
 
-def calculate_tp_weights(census_years: pd.DataFrame) -> pd.DataFrame:
-    census_years = pd.concat(
-        [
-            pd.concat([
-                census_years, pd.Series(time_point, name="model_time_point", index=census_years.index)
-            ], axis=1)
-            for time_point in pmc.MODELING_TIME_POINTS
-        ]
-    )
-
-    census_years["distance"] = census_years.apply(
-        lambda x: 
-            (int(x["census_time_point"].split("q")[0]) + int(x["census_time_point"].split("q")[1]) / 4)
-            -
-            (int(x["model_time_point"].split("q")[0]) + int(x["model_time_point"].split("q")[1]) / 4)
-        ,
-        axis=1
-    )
-
-    census_weights = pd.concat(
-        [
-            (
-                census_years
-                .loc[census_years["distance"] <= 0]
-                .sort_values("distance", ascending=False)
-                .groupby(["iso3", "model_time_point"])[["census_time_point", "distance"]]
-                .first()
-                .reset_index()
-            ),
-            (
-                census_years
-                .loc[census_years["distance"] >= 0]
-                .sort_values("distance")
-                .groupby(["iso3", "model_time_point"])[["census_time_point", "distance"]]
-                .first()
-                .reset_index()
-            ),
-        ]
-    )
-    census_weights = census_weights.drop_duplicates().set_index(["iso3", "model_time_point"])
-    census_weights["distance"] = census_weights["distance"].abs()
-    census_weights["distance"] = census_weights.groupby(["iso3", "model_time_point"])["distance"].transform(sum) - census_weights["distance"]
-    census_weights["weight"] = (census_weights["distance"] / census_weights.groupby(["iso3", "model_time_point"])["distance"].transform(sum)).fillna(1)
-    census_weights = (
-        census_weights
-        .drop("distance", axis=1)
-        .set_index("census_time_point", append=True)
-        .sort_index()
-    )
-
-    return census_weights
-
-
-def generate_census_inputs(pm_data: PopulationModelData) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
-    available_census_years = pm_data.list_census_data()
-
-    keep_iso3s = ["BRA", "MEX", "USA", "ZAF"]
-    data_years = [
-        i for i in available_census_years
-        if i[0] in keep_iso3s
-    ]
-
-    task_admins = []
-    census_years = []
-    for iso3, year, quarter in data_years:
-        print(f"Processing {iso3} {year}q{quarter}")
-        admins = pm_data.load_census_data(iso3, year)
-        admins["iso3"] = iso3
-        if iso3 == "USA":
-            task_level = 3
-        else:
-            task_level = min(2, admins.admin_level.max())
-        parent_admins = admins.loc[admins.admin_level == task_level]
-        parent_admins = parent_admins.loc[:, ["iso3", "shape_id", "admin_level", "geometry"]]
-        parent_admins = parent_admins.rename(
-            columns={
-                "shape_id": "task_parent_id",
-                "admin_level": "task_parent_level",
-            },
-        )
-        parent_admins = parent_admins.set_index(["iso3", "task_parent_id", "task_parent_level"])
-
-        admins = admins.loc[admins.admin_level == admins.admin_level.max()]
-        admins["task_parent_id"] = admins["path_to_top_parent"].str.split(",").str[task_level]
-        admins["task_parent_level"] = task_level
-        admins["census_time_point"] = f"{year}q{quarter}"
-        admins = admins.loc[:, ["iso3", "task_parent_id", "task_parent_level"]].value_counts().rename("most_detailed_units")
-        admins = parent_admins.join(admins)
-        task_admins.append(admins)
-        census_years.append(
-            pd.DataFrame({"census_time_point": f"{year}q{quarter}"}, index=pd.Index([iso3], name="iso3"))
-        )
-    task_admins = pd.concat(task_admins)
-    census_years = pd.concat(census_years)
-
-    census_weights = calculate_tp_weights(census_years)
-
-    return task_admins, census_weights
+def geometry_collection_to_multipolygon(geom: GeometryCollection | MultiPolygon) -> None | MultiPolygon:
+    if isinstance(geom, GeometryCollection) and not isinstance(geom, MultiPolygon):
+        polygons = [g for g in geom.geoms if g.geom_type in ('Polygon', 'MultiPolygon')]
+        if polygons:
+            return unary_union(polygons)
+        return None
+    return geom
 
 
 def process_census_data(
@@ -187,14 +255,13 @@ def process_census_data(
     version: str,
     pm_data: PopulationModelData,
     task_map: gpd.GeoSeries,
-    census_time_point: str,
     model_time_points: list[str],
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, rt.RasterArray, list[rt.RasterArray]]:
     modeling_frame = pm_data.load_modeling_frame(resolution)
     model_spec = pm_data.load_model_specification(resolution, version)
     buffer_size = int(resolution) * 5
 
-    census_data = pm_data.load_census_data(task_map["iso3"], census_time_point.split("q")[0])
+    census_data = pm_data.load_census_data(task_map["iso3"], task_map["census_time_point"].split("q")[0])
     buffered_parent_geometry = census_data.loc[census_data["shape_id"] == task_map["task_parent_id"]].geometry.buffer(buffer_size)
 
     census_data = census_data.loc[
@@ -209,9 +276,11 @@ def process_census_data(
     invalid_admins = ~census_data.geometry.is_valid
     if invalid_admins.any():
         census_data.loc[invalid_admins, "geometry"] = census_data.loc[invalid_admins, "geometry"].make_valid()
+    if census_data["geometry"].apply(lambda x: isinstance(x, GeometryCollection)).any():
+        census_data["geometry"] = census_data["geometry"].apply(geometry_collection_to_multipolygon)
     if not census_data.geometry.is_valid.all():
         raise ValueError("Invalid admins remain")
-    census_data["geometry"] = census_data.geometry.map(lambda g: set_precision(g, 0.001))
+    census_data["geometry"] = census_data.geometry.map(lambda g: set_precision(g, 0.01))
 
     block_keys = (
         modeling_frame.
@@ -237,7 +306,7 @@ def process_census_data(
             prediction_data[f"pixel_population_{model_time_point}"] = prediction_raster.to_numpy().flatten()
     prediction_data.index.name = "pixel_id"
     prediction_data = prediction_data.sort_index().reset_index()
-    prediction_data["geometry"] = prediction_data.geometry.map(lambda g: set_precision(g, 0.001))
+    # prediction_data["geometry"] = prediction_data.geometry.map(lambda g: set_precision(g, 0.01))
     prediction_data["pixel_area"] = prediction_data.area
 
     return census_data, prediction_data, prediction_raster
@@ -250,7 +319,7 @@ def generate_raking_factors(
 ) -> gpd.GeoDataFrame:
     for model_time_point in model_time_points:
         overlay_gdf[f"covered_pixel_population_{model_time_point}"] = overlay_gdf[f"pixel_population_{model_time_point}"] * overlay_gdf["pixel_coverage"]
-        overlay_gdf[f"shape_population_{model_time_point}"] = overlay_gdf.groupby("shape_id")[f"covered_pixel_population_{model_time_point}"].transform(sum)
+        overlay_gdf[f"shape_population_{model_time_point}"] = overlay_gdf.groupby("shape_id")[f"covered_pixel_population_{model_time_point}"].transform("sum")
 
     overlay_gdf[f"raking_factor_{census_time_point}"] = safe_divide(
         overlay_gdf["population_total"].astype(np.float32),

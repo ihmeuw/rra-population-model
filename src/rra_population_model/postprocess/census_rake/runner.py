@@ -13,14 +13,6 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.model.modeling.datamodel import ModelSpecification
 from rra_population_model.postprocess.census_rake import utils
 
-# resolution: str = "40"
-# version: str = "2026_03_11.001"
-# iso3: str = "USA"
-# task_parent_id: str = "020160001001"
-# census_time_point: str = "2020q1"
-# output_dir: str | Path = pmc.MODEL_ROOT
-# verbose: bool = True
-
 
 def census_rake_main(
     resolution: str,
@@ -46,7 +38,7 @@ def census_rake_main(
         logger.info(
             "Processing census and prediction data\n"
             f'    Number of admins: {task_map["most_detailed_units"]:,}\n'
-            f'    Area: {int(task_map["area"] / 1e6):,} km^2'
+            f'    Area: {int(task_map["area"] / 1e6):,} km^2\n'
             f'    Bounding Box Area: {int(task_map["bounds_area"] / 1e6):,} km^2'
         )
     census_data, prediction_data, template_raster = utils.process_census_data(
@@ -57,15 +49,20 @@ def census_rake_main(
         model_time_points,
     )
 
-    if verbose:
-        logger.info("Raking")
-    raked_rasters = utils.rake(
-        census_data,
-        prediction_data,
-        template_raster,
-        census_time_point,
-        model_time_points,
-    )
+    if prediction_data is not None:
+        if verbose:
+            logger.info("Raking")
+        raked_rasters = utils.rake(
+            census_data,
+            prediction_data,
+            template_raster,
+            census_time_point,
+            model_time_points,
+        )
+    else:
+        if verbose:
+            logger.info("Census population is 0, creating rasters of 0s")
+        raked_rasters = [template_raster] * len(model_time_points)
 
     if verbose:
         logger.info("Saving raked rasters")
@@ -203,8 +200,8 @@ def census_rake(
         },
         max_attempts=4,
         resource_scales={
-            "memory":  iter([50     , 66     , 600     ]),  # G
-            "runtime": iter([10 * 60, 30 * 60, 600 * 60]),  # seconds
+            "memory":  iter([50     , 100    , 240     ]),  # G
+            "runtime": iter([10 * 60, 60 * 60, 120 * 60]),  # seconds
         },
         log_root=pm_data.log_dir("postprocess_census_rake"),
     )

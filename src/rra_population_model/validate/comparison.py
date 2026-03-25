@@ -2,8 +2,6 @@ import click
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import rasterra as rt
-import shapely
 from rasterio.features import MergeAlg, rasterize
 from rra_tools import jobmon
 
@@ -93,7 +91,10 @@ def comparison_validation(
     pm_data = PopulationModelData(output_dir)
 
     census_tasks = pm_data.list_census_data()
-    census_tasks = [i[:2] for i in census_tasks]
+    census_tasks = [
+        i[:2] for i in census_tasks
+        if f"{i[1]}q{i[2]}" in pmc.MODELING_TIME_POINTS and int(i[1]) < 2023 and "_" not in i[0]
+    ]
 
     jobmon.run_parallel(
         runner="pmtask validate",
@@ -110,6 +111,10 @@ def comparison_validation(
             "source": source,
             "output-dir": output_dir,
         },
-        max_attempts=3,
+        max_attempts=2,
+        resource_scales={
+            "memory":  iter([60     ]),  # G
+            "runtime": iter([30 * 60]),  # seconds
+        },
         log_root=pm_data.log_dir("validate_comparison"),
     )

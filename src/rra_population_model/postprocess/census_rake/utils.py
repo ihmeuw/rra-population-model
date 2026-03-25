@@ -90,7 +90,7 @@ def get_task_admins(admins: gpd.GeoDataFrame, task_level: int) -> gpd.GeoDataFra
     parent_admins = (
         parent_admins
         .set_index(["iso3", "census_time_point", "task_parent_id", "task_parent_level"])
-        .loc[:, ["geometry", "area", "bounds_area"]]
+        .loc[:, ["geometry", "area", "bounds_area", "population_total"]]
     )
 
     admins = admins.loc[admins["admin_level"] == admins["admin_level"].max()]
@@ -139,26 +139,27 @@ def generate_census_inputs(
         while opt_check:
             area_exceed = task_level_admins["bounds_area"] > area_threshold
             admins_exceed = task_level_admins["most_detailed_units"] > admins_threshold
-            reduce_parents = (
-                task_level_admins
-                .loc[area_exceed | admins_exceed]
-                .index
-                .get_level_values("task_parent_id")
-                .tolist()
-            )
-            task_level_admins = task_level_admins.drop(reduce_parents, level="task_parent_id", errors="ignore")
-            admins[f"level_{task_level}_id"] = admins["path_to_top_parent"].str.split(",").str[task_level]
-            task_level_admins_supp = get_task_admins(
-                admins.loc[admins[f"level_{task_level}_id"].isin(reduce_parents)].copy(),
-                task_level + 1,
-            )
-            task_level_admins = pd.concat([task_level_admins, task_level_admins_supp])
-            task_level += 1
-            opt_check = (
-                task_level < admins["admin_level"].max()
-                and
-                area_exceed.sum() + admins_exceed.sum() > 0
-            )
+            has_population = task_level_admins["population_total"] > 0
+            to_split = (area_exceed | admins_exceed) & has_population
+            if to_split.any():
+                reduce_parents = (
+                    task_level_admins
+                    .loc[to_split]
+                    .index
+                    .get_level_values("task_parent_id")
+                    .tolist()
+                )
+                task_level_admins = task_level_admins.drop(reduce_parents, level="task_parent_id", errors="ignore")
+                admins[f"level_{task_level}_id"] = admins["path_to_top_parent"].str.split(",").str[task_level]
+                task_level_admins_supp = get_task_admins(
+                    admins.loc[admins[f"level_{task_level}_id"].isin(reduce_parents)].copy(),
+                    task_level + 1,
+                )
+                task_level_admins = pd.concat([task_level_admins, task_level_admins_supp])
+                task_level += 1
+                opt_check = task_level < admins["admin_level"].max()
+            else:
+                opt_check = False
 
         task_level_admins = task_level_admins.drop(EXCLUSIONS.get(iso3, []), level="task_parent_id", errors="ignore")
         task_admins.append(task_level_admins)
@@ -256,32 +257,12 @@ def process_census_data(
     pm_data: PopulationModelData,
     task_map: gpd.GeoSeries,
     model_time_points: list[str],
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame | None, rt.RasterArray]:
+) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None, rt.RasterArray]:
     modeling_frame = pm_data.load_modeling_frame(resolution)
     model_spec = pm_data.load_model_specification(resolution, version)
     buffer_size = np.ceil(np.sqrt(int(resolution) ** 2 / 2))
 
     buffered_parent_geometry = task_map["geometry"].buffer(buffer_size)
-
-    census_data = pm_data.load_census_data(task_map["iso3"], task_map["census_time_point"].split("q")[0])
-    census_data = census_data.loc[
-        census_data["admin_level"] == census_data["admin_level"].max()
-    ]
-    census_data = census_data.loc[
-        census_data["path_to_top_parent"].apply(lambda x: x.split(",")[task_map["task_parent_level"]] == task_map["task_parent_id"])
-    ]
-    census_data = census_data.loc[:, ["shape_id", "population_total", "geometry"]]
-    census_data = census_data.to_crs(modeling_frame.crs)
-
-    invalid_admins = ~census_data.geometry.is_valid
-    if invalid_admins.any():
-        census_data.loc[invalid_admins, "geometry"] = census_data.loc[invalid_admins, "geometry"].make_valid()
-    if census_data["geometry"].apply(lambda x: isinstance(x, GeometryCollection)).any():
-        census_data["geometry"] = census_data["geometry"].apply(geometry_collection_to_multipolygon)
-    if not census_data.geometry.is_valid.all():
-        raise ValueError("Invalid admins remain")
-    census_data["geometry"] = census_data.geometry.map(lambda g: set_precision(g, 0.01))
-
     block_keys = (
         modeling_frame.
         loc[modeling_frame.intersects(buffered_parent_geometry), "block_key"]
@@ -289,9 +270,34 @@ def process_census_data(
         .tolist()
     )
 
-    nonzero_census = census_data["population_total"].sum() > 0
+    census_data: pd.DataFrame | None = None
     prediction_data: pd.DataFrame | None = None
-    if nonzero_census:
+    if task_map["population_total"] == 0:
+        prediction_raster = rt.merge([
+            pm_data.load_raw_prediction(block_key, model_time_points[0], model_spec)
+            for block_key in block_keys
+        ])
+        prediction_raster = prediction_raster.clip(task_map["geometry"]).mask(task_map["geometry"]) * 0
+    else:
+        census_data = pm_data.load_census_data(task_map["iso3"], task_map["census_time_point"].split("q")[0])
+        census_data = census_data.loc[
+            census_data["admin_level"] == census_data["admin_level"].max()
+        ]
+        census_data = census_data.loc[
+            census_data["path_to_top_parent"].apply(lambda x: x.split(",")[task_map["task_parent_level"]] == task_map["task_parent_id"])
+        ]
+        census_data = census_data.loc[:, ["shape_id", "population_total", "geometry"]]
+        census_data = census_data.to_crs(modeling_frame.crs)
+
+        invalid_admins = ~census_data["geometry"].is_valid
+        if invalid_admins.any():
+            census_data.loc[invalid_admins, "geometry"] = census_data.loc[invalid_admins, "geometry"].make_valid()
+        if census_data["geometry"].apply(lambda x: isinstance(x, GeometryCollection)).any():
+            census_data["geometry"] = census_data["geometry"].apply(geometry_collection_to_multipolygon)
+        if not census_data["geometry"].is_valid.all():
+            raise ValueError("Invalid admins remain")
+        census_data["geometry"] = census_data["geometry"].map(lambda g: set_precision(g, 0.01))
+
         for model_time_point in model_time_points:
             prediction_raster = rt.merge([
                 pm_data.load_raw_prediction(block_key, model_time_point, model_spec)
@@ -310,12 +316,6 @@ def process_census_data(
         prediction_data = prediction_data.reset_index()
         # prediction_data["geometry"] = prediction_data.geometry.map(lambda g: set_precision(g, 0.01))
         prediction_data["pixel_area"] = prediction_data.area
-    else:
-        prediction_raster = rt.merge([
-            pm_data.load_raw_prediction(block_key, model_time_points[0], model_spec)
-            for block_key in block_keys
-        ])
-        prediction_raster = prediction_raster.clip(task_map["geometry"]).mask(task_map["geometry"]) * 0
 
     return census_data, prediction_data, prediction_raster
 

@@ -102,8 +102,8 @@ def comparison_validation(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "15G",
-            "runtime": "15m",
+            "memory": "10G",
+            "runtime": "5m",
             "project": "proj_rapidresponse",
         },
         flat_node_args=(("iso3", "year"), census_tasks),
@@ -111,10 +111,10 @@ def comparison_validation(
             "source": source,
             "output-dir": output_dir,
         },
-        max_attempts=2,
+        max_attempts=3,
         resource_scales={
-            "memory":  iter([60     ]),  # G
-            "runtime": iter([30 * 60]),  # seconds
+            "memory":  iter([60     , 220     ]),  # G
+            "runtime": iter([10 * 60, 30 * 60 ]),  # seconds
         },
         log_root=pm_data.log_dir("validate_comparison"),
     )

@@ -3,7 +3,6 @@ import numpy as np
 import rasterra as rt
 from rasterra._features import raster_geometry_mask
 from rra_tools import jobmon
-import tqdm
 import geopandas as gpd
 import shapely
 
@@ -77,91 +76,37 @@ def rake_main(
         raked = unraked_data * raking_factor
 
         if input_data == "raw":
-            print("Loading inference data")
+            print("Loading raked_census data")
             model_frame = pm_data.load_modeling_frame(resolution)
             model_frame = model_frame.loc[model_frame["block_key"] == block_key]
+            block_geometry = model_frame.union_all()
 
+            task_admins, census_weights = pm_data.load_census_raking_inputs(model_spec)
+            task_admins = task_admins.loc[task_admins.intersects(block_geometry)]
+            task_admins = list(
+                task_admins
+                .reset_index()
+                .loc[:, ["iso3", "task_parent_id", "census_time_point"]]
+                .itertuples(index=False, name=None)
+            )
             census_population = []
-            census_weight = []
-            for tile_key in tqdm.tqdm(model_frame["tile_key"].to_list()):
-                tile_census_population = pm_data.load_tile_inference_data(
-                    resolution,
-                    tile_key,
-                    time_point,
-                    f"population_{model_spec.denominator}",
-                )
-                if tile_census_population is None:
-                    tile_census_population = pm_data.load_feature(
-                        resolution=resolution,
-                        block_key=block_key,
-                        feature_name=model_spec.denominator,
-                        time_point=time_point,
-                        subset_bounds=model_frame[model_frame.tile_key == tile_key].geometry.iloc[0],
+            for iso3, shape_id, census_time_point in task_admins:
+                census_population.append(
+                    pm_data.load_raked_census(
+                        iso3,
+                        shape_id,
+                        prediction_time_point,
+                        census_time_point,
+                        model_spec,
                     )
-                    tile_census_population = rt.RasterArray(
-                        np.zeros_like(tile_census_population),
-                        transform=tile_census_population.transform,
-                        crs=tile_census_population.crs,
-                        no_data_value=np.nan,
-                    )
-                    tile_census_weight = rt.RasterArray(
-                        np.zeros_like(tile_census_population),
-                        transform=tile_census_population.transform,
-                        crs=tile_census_population.crs,
-                        no_data_value=np.nan,
-                    )
-                else:
-                    tile_census_weight = pm_data.load_tile_inference_data(
-                        resolution,
-                        tile_key,
-                        time_point,
-                        "area_weight",
-                    )
-                census_population.append(tile_census_population)
-                census_weight.append(tile_census_weight)
-
-            census_weight = rt.merge(census_weight)
-            census_population = rt.merge(census_population)
-            if np.nansum(census_weight) > 0:
-                if (np.round(census_weight.bounds, 2) != np.round(raked.bounds, 2)).any():
-                    census_bounds = create_bounds_polygon(census_weight)
-                    raked_bounds = create_bounds_polygon(raked)
-
-                    missing = raked_bounds.difference(census_bounds, grid_size=int(resolution))
-                    missing = raked.clip(missing).mask(missing)
-
-                    census_weight = rt.merge([census_weight, missing])
-                    census_population = rt.merge([census_population, missing])
-                    if (np.round(census_weight.bounds, 2) != np.round(raked.bounds, 2)).any():
-                        raise ValueError("Still incompatible after attaching missing pixels")
-
-                array = census_population.to_numpy()
-                nan_mask = np.isnan(array)
-                array[nan_mask] = 0
-                census_population = rt.RasterArray(
-                    array,
-                    transform=raked.transform,
-                    crs=raked.crs,
-                    no_data_value=np.nan,
+                    *
+                    census_weights.loc[iso3, prediction_time_point, census_time_point].item()
                 )
+            census_population = rt.merge(census_population, method="sum")
+            census_population = census_population.clip(block_geometry).mask(block_geometry)
 
-                array = census_weight.to_numpy()
-                nan_mask = np.isnan(array)
-                array[nan_mask] = 0
-                census_weight = rt.RasterArray(
-                    array,
-                    transform=raked.transform,
-                    crs=raked.crs,
-                    no_data_value=np.nan,
-                )
+            raked = rt.merge([census_population, raked], method="first")
 
-                print("Splicing in inference data")
-                raked = (
-                    (raked * (1 - census_weight))
-                    + (census_population * census_weight)
-                )
-            else:
-                print("No population to splice")
         elif input_data not in ["raked", "raw_skip"]:
             raise ValueError(f"Invalid `input_data` type: {input_data}")
 

@@ -15,9 +15,8 @@ from rra_population_model.data import PopulationModelData
 
 STEP_LIMIT = 3
 
-EXCLUSIONS = {
+ADMIN_EXCLUSIONS = {
     "ARG": [
-        "94021",  # South Atlantic Islands
         "94028",  # Antarctica
     ],
 }
@@ -87,10 +86,11 @@ def get_task_admins(admins: gpd.GeoDataFrame, task_level: int) -> gpd.GeoDataFra
     parent_admins["area"] = parent_admins.area
     bounds = parent_admins.bounds
     parent_admins["bounds_area"] = (bounds['maxx'] - bounds['minx']) * (bounds['maxy'] - bounds['miny'])
+    parent_admins["perimeter"] = parent_admins.geometry.length
     parent_admins = (
         parent_admins
         .set_index(["iso3", "census_time_point", "task_parent_id", "task_parent_level"])
-        .loc[:, ["geometry", "area", "bounds_area", "population_total"]]
+        .loc[:, ["geometry", "area", "bounds_area", "perimeter", "population_total"]]
     )
 
     admins = admins.loc[admins["admin_level"] == admins["admin_level"].max()]
@@ -105,7 +105,8 @@ def get_task_admins(admins: gpd.GeoDataFrame, task_level: int) -> gpd.GeoDataFra
 def generate_census_inputs(
     pm_data: PopulationModelData,
     start_level: int,
-    area_threshold: float,
+    bounds_area_threshold: float,
+    area_no_pop_threshold: float,
     admins_threshold: int,
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
     available_census_years = pm_data.list_census_data()
@@ -126,21 +127,20 @@ def generate_census_inputs(
     for iso3, year, quarter in data_years:
         print(f"Processing {iso3} {year}q{quarter}")
         admins = pm_data.load_census_data(iso3, year)
+        admins["population_total"] = admins["population_total"].fillna(0)
         admins["iso3"] = iso3
         admins["census_time_point"] = f"{year}q{quarter}"
-        # if iso3 in ["AUS", "USA", "CAN", "CZE", "PRT"]:
-        #     start_level = 3
-        # else:
-        #     start_level = 2
+
         task_level = min(start_level, admins["admin_level"].max())
         admins = admins.loc[admins["admin_level"] >= task_level]
         task_level_admins = get_task_admins(admins.copy(), task_level)
         opt_check = task_level < admins["admin_level"].max()
         while opt_check:
-            area_exceed = task_level_admins["bounds_area"] > area_threshold
+            bounds_area_exceed = task_level_admins["bounds_area"] > bounds_area_threshold
             admins_exceed = task_level_admins["most_detailed_units"] > admins_threshold
             has_population = task_level_admins["population_total"] > 0
-            to_split = (area_exceed | admins_exceed) & has_population
+            area_no_pop_exceed = task_level_admins["area"] > area_no_pop_threshold
+            to_split = (bounds_area_exceed | admins_exceed) & (has_population | area_no_pop_exceed)
             if to_split.any():
                 reduce_parents = (
                     task_level_admins
@@ -161,7 +161,7 @@ def generate_census_inputs(
             else:
                 opt_check = False
 
-        task_level_admins = task_level_admins.drop(EXCLUSIONS.get(iso3, []), level="task_parent_id", errors="ignore")
+        task_level_admins = task_level_admins.drop(ADMIN_EXCLUSIONS.get(iso3, []), level="task_parent_id", errors="ignore")
         task_admins.append(task_level_admins)
         census_years.append(
             pd.DataFrame({"census_time_point": f"{year}q{quarter}"}, index=pd.Index([iso3], name="iso3"))
@@ -277,7 +277,20 @@ def process_census_data(
             pm_data.load_raw_prediction(block_key, model_time_points[0], model_spec)
             for block_key in block_keys
         ])
-        prediction_raster = prediction_raster.clip(task_map["geometry"]).mask(task_map["geometry"]) * 0
+        prediction_raster = prediction_raster.clip(task_map["geometry"]).mask(task_map["geometry"])
+        prediction_array = prediction_raster.to_numpy()
+        no_data_value = prediction_raster.no_data_value
+        if not np.isnan(no_data_value):
+            raise ValueError("Unexpected no_data_value")
+        prediction_raster = rt.RasterArray(
+            np.where(
+                np.isnan(prediction_array), no_data_value, 0
+            )
+            .astype(prediction_array.dtype),
+            transform=prediction_raster.transform,
+            crs=prediction_raster.crs,
+            no_data_value=no_data_value,
+        )
     else:
         census_data = pm_data.load_census_data(task_map["iso3"], task_map["census_time_point"].split("q")[0])
         census_data = census_data.loc[
@@ -424,6 +437,8 @@ def single_admin_overlay(
     pixel_area = float(pixel_gdf["pixel_area"].iloc[0])
     buffer_size = np.ceil(np.sqrt(pixel_area / 2))
     interior = geometry.buffer(-buffer_size)
+    if not interior.is_valid:
+        interior = interior.buffer(0)
 
     if interior.is_empty:
         interior_valid = np.zeros(template_raster.shape, dtype=bool)

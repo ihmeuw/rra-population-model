@@ -333,11 +333,102 @@ def process_census_data(
     return census_data, prediction_data, prediction_raster
 
 
+def calculate_time_point_raking_factor(
+    overlay_gdf: gpd.GeoDataFrame,
+    sorted_model_time_points: list[str],
+    step: int,
+) -> gpd.GeoDataFrame:
+    model_time_point = sorted_model_time_points[step]
+    prev_model_time_points = sorted_model_time_points[:step]
+    prev_model_time_point = prev_model_time_points[-1]
+
+    # Find the closest non-zero previous time point for each row. This prevents
+    # a transient zero in shape_population from collapsing the step-limit
+    # calculation to zero when population later becomes non-zero again.
+    overlay_gdf["shape_population_prev"] = overlay_gdf[f"shape_population_{prev_model_time_point}"]
+    overlay_gdf["raking_factor_prev"] = overlay_gdf[f"raking_factor_{prev_model_time_point}"]
+    for earlier_tp in reversed(prev_model_time_points[:-1]):
+        still_zero = (
+            (overlay_gdf["shape_population_prev"] == 0)
+            &
+            (overlay_gdf[f"shape_population_{model_time_point}"] != 0)
+        )
+        if not still_zero.any():
+            break
+        overlay_gdf.loc[still_zero, "shape_population_prev"] = (
+            overlay_gdf
+            .loc[still_zero, f"shape_population_{earlier_tp}"]
+        )
+        overlay_gdf.loc[still_zero, "raking_factor_prev"] = (
+            overlay_gdf
+            .loc[still_zero, f"raking_factor_{earlier_tp}"]
+        )
+
+    # 1) calculate raking factors with constrained increase/decrease allowed from previous time step
+    overlay_gdf["raking_factor_decrease"] = (
+        overlay_gdf["shape_population_prev"]
+        *
+        (1 / (STEP_LIMIT * overlay_gdf[f"shape_population_{model_time_point}"]))
+        *
+        overlay_gdf["raking_factor_prev"]
+    )
+    overlay_gdf["raking_factor_decrease"] = overlay_gdf["raking_factor_decrease"].clip(-np.inf, 1)
+    overlay_gdf["raking_factor_increase"] = (
+        overlay_gdf["shape_population_prev"]
+        *
+        (STEP_LIMIT / overlay_gdf[f"shape_population_{model_time_point}"])
+        *
+        overlay_gdf["raking_factor_prev"]
+    )
+    overlay_gdf["raking_factor_increase"] = overlay_gdf["raking_factor_increase"].clip(1, np.inf)
+
+    # 2) splice together constrained raking factors based on whether data time point is increasing or decreasing
+    decrease = (
+        overlay_gdf[f"shape_population_{model_time_point}"]
+        <
+        overlay_gdf["shape_population_prev"]
+    )
+    if decrease.all():
+        overlay_gdf[f"raking_factor_{model_time_point}"] = (
+            overlay_gdf.loc[:, ["raking_factor_decrease", "raking_factor_prev"]].max(axis=1)
+        )
+    elif not decrease.any():
+        overlay_gdf[f"raking_factor_{model_time_point}"] = (
+            overlay_gdf.loc[:, ["raking_factor_increase", "raking_factor_prev"]].min(axis=1)
+        )
+    else:
+        overlay_gdf[f"raking_factor_{model_time_point}"] = pd.concat([
+            overlay_gdf.loc[decrease, ["raking_factor_decrease", "raking_factor_prev"]].max(axis=1),
+            overlay_gdf.loc[~decrease, ["raking_factor_increase", "raking_factor_prev"]].min(axis=1),
+        ]).sort_index()
+
+    # 3) replace infs with previous time point OR try directly calculating if previous is also inf
+    overlay_gdf.loc[
+        np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
+        f"raking_factor_{model_time_point}"
+    ] = overlay_gdf["raking_factor_prev"]
+    overlay_gdf["raking_factor_direct"] = safe_divide(
+        overlay_gdf["population_total"].astype(np.float32),
+        overlay_gdf[f"shape_population_{model_time_point}"],
+    )
+    overlay_gdf.loc[
+        np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
+        f"raking_factor_{model_time_point}"
+    ] = overlay_gdf["raking_factor_direct"]
+
+    overlay_gdf = overlay_gdf.drop(
+        ["shape_population_prev", "raking_factor_prev", "raking_factor_decrease", "raking_factor_increase", "raking_factor_direct"],
+        axis=1,
+    )
+
+    return overlay_gdf
+
+
 def generate_and_apply_raking_factors(
-    overlay_gdf: pd.DataFrame,
+    overlay_gdf: gpd.GeoDataFrame,
     census_time_point: str,
     model_time_points: list[str],
-) -> pd.DataFrame:
+) -> gpd.GeoDataFrame:
     for model_time_point in model_time_points:
         overlay_gdf[f"covered_pixel_population_{model_time_point}"] = overlay_gdf[f"pixel_population_{model_time_point}"] * overlay_gdf["pixel_coverage"]
         overlay_gdf[f"shape_population_{model_time_point}"] = overlay_gdf.groupby("shape_id")[f"covered_pixel_population_{model_time_point}"].transform("sum")
@@ -357,60 +448,11 @@ def generate_and_apply_raking_factors(
     post_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points), reverse=True) if i[0] <= 0]
     for sorted_model_time_points in [pre_sorted_model_time_points, post_sorted_model_time_points]:
         for i in range(1, len(sorted_model_time_points)):
-            model_time_point = sorted_model_time_points[i]
-            prev_model_time_point = sorted_model_time_points[i-1]
-
-            # 1) calculate raking factors with constrained increase/decrease allowed from previous time step
-            overlay_gdf["raking_factor_decrease"] = (
-                overlay_gdf[f"shape_population_{prev_model_time_point}"]
-                *
-                (1 / (STEP_LIMIT * overlay_gdf[f"shape_population_{model_time_point}"]))
-                *
-                overlay_gdf[f"raking_factor_{prev_model_time_point}"]
+            overlay_gdf = calculate_time_point_raking_factor(
+                overlay_gdf,
+                sorted_model_time_points,
+                i,
             )
-            overlay_gdf["raking_factor_decrease"] = overlay_gdf["raking_factor_decrease"].clip(-np.inf, 1)
-            overlay_gdf["raking_factor_increase"] = (
-                overlay_gdf[f"shape_population_{prev_model_time_point}"]
-                *
-                (STEP_LIMIT / overlay_gdf[f"shape_population_{model_time_point}"])
-                *
-                overlay_gdf[f"raking_factor_{prev_model_time_point}"]
-            )
-            overlay_gdf["raking_factor_increase"] = overlay_gdf["raking_factor_increase"].clip(1, np.inf)
-
-            # 2) splice together constrained raking factors based on whether data time point is increasing or decreasing
-            decrease = (
-                overlay_gdf[f"shape_population_{model_time_point}"]
-                <
-                overlay_gdf[f"shape_population_{prev_model_time_point}"]
-            )
-            if decrease.all():
-                overlay_gdf[f"raking_factor_{model_time_point}"] = (
-                    overlay_gdf.loc[:, ["raking_factor_decrease", f"raking_factor_{prev_model_time_point}"]].max(axis=1)
-                )
-            elif not decrease.any():
-                overlay_gdf[f"raking_factor_{model_time_point}"] = (
-                    overlay_gdf.loc[:, ["raking_factor_increase", f"raking_factor_{prev_model_time_point}"]].min(axis=1)
-                )
-            else:
-                overlay_gdf[f"raking_factor_{model_time_point}"] = pd.concat([
-                    overlay_gdf.loc[decrease, ["raking_factor_decrease", f"raking_factor_{prev_model_time_point}"]].max(axis=1),
-                    overlay_gdf.loc[~decrease, ["raking_factor_increase", f"raking_factor_{prev_model_time_point}"]].min(axis=1),
-                ]).sort_index()
-
-            # 3) replace infs with previous time point OR try directly calculating if previous is also inf
-            overlay_gdf.loc[
-                np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
-                f"raking_factor_{model_time_point}"
-            ] = overlay_gdf[f"raking_factor_{prev_model_time_point}"]
-            overlay_gdf["raking_factor_direct"] = safe_divide(
-                overlay_gdf["population_total"].astype(np.float32),
-                overlay_gdf[f"shape_population_{model_time_point}"],
-            )
-            overlay_gdf.loc[
-                np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
-                f"raking_factor_{model_time_point}"
-            ] = overlay_gdf["raking_factor_direct"]
 
     for model_time_point in model_time_points:
         overlay_gdf.loc[
@@ -505,7 +547,7 @@ def rake(
     overlay_gdf["pixel_coverage"] = safe_divide(
         overlay_gdf["isection_area"],
         overlay_gdf["pixel_area"],
-    )
+    ).clip(0, 1)
 
     overlay_gdf = generate_and_apply_raking_factors(
         overlay_gdf, census_time_point, model_time_points

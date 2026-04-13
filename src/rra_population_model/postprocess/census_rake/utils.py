@@ -13,7 +13,7 @@ from shapely.ops import unary_union
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
-STEP_LIMIT = 3
+STEP_LIMIT = 1.5
 
 ADMIN_EXCLUSIONS = {
     "ARG": [
@@ -337,91 +337,79 @@ def calculate_time_point_raking_factor(
     overlay_gdf: gpd.GeoDataFrame,
     sorted_model_time_points: list[str],
     step: int,
-) -> gpd.GeoDataFrame:
+    rf_anchor: npt.NDArray[np.floating[Any]],
+) -> tuple[gpd.GeoDataFrame, npt.NDArray[np.floating[Any]]]:
     model_time_point = sorted_model_time_points[step]
-    prev_model_time_points = sorted_model_time_points[:step]
-    prev_model_time_point = prev_model_time_points[-1]
+    prev_model_time_point = sorted_model_time_points[step - 1]
 
-    # Find the closest non-zero previous time point for each row. This prevents
-    # a transient zero in shape_population from collapsing the step-limit
-    # calculation to zero when population later becomes non-zero again.
-    overlay_gdf["shape_population_prev"] = overlay_gdf[f"shape_population_{prev_model_time_point}"]
-    overlay_gdf["raking_factor_prev"] = overlay_gdf[f"raking_factor_{prev_model_time_point}"]
-    for earlier_tp in reversed(prev_model_time_points[:-1]):
-        still_zero = (
-            (overlay_gdf["shape_population_prev"] == 0)
-            &
-            (overlay_gdf[f"shape_population_{model_time_point}"] != 0)
-        )
+    # Find the closest non-zero previous time point as the step-limit reference.
+    # A zero shape_population reference collapses raked_pop_prev to zero, which
+    # would force raked_pop_t to zero even after predictions recover.
+    shape_population_prev = overlay_gdf[f"shape_population_{prev_model_time_point}"].to_numpy()
+    raking_factor_prev = overlay_gdf[f"raking_factor_{prev_model_time_point}"].to_numpy()
+    for earlier_tp in reversed(sorted_model_time_points[:step - 1]):
+        still_zero = (shape_population_prev == 0) & (overlay_gdf[f"shape_population_{model_time_point}"].to_numpy() != 0)
         if not still_zero.any():
             break
-        overlay_gdf.loc[still_zero, "shape_population_prev"] = (
-            overlay_gdf
-            .loc[still_zero, f"shape_population_{earlier_tp}"]
-        )
-        overlay_gdf.loc[still_zero, "raking_factor_prev"] = (
-            overlay_gdf
-            .loc[still_zero, f"raking_factor_{earlier_tp}"]
-        )
+        shape_population_prev[still_zero] = overlay_gdf.loc[still_zero, f"shape_population_{earlier_tp}"].to_numpy()
+        raking_factor_prev[still_zero] = overlay_gdf.loc[still_zero, f"raking_factor_{earlier_tp}"].to_numpy()
 
-    # 1) calculate raking factors with constrained increase/decrease allowed from previous time step
-    overlay_gdf["raking_factor_decrease"] = (
-        overlay_gdf["shape_population_prev"]
-        *
-        (1 / (STEP_LIMIT * overlay_gdf[f"shape_population_{model_time_point}"]))
-        *
-        overlay_gdf["raking_factor_prev"]
-    )
-    overlay_gdf["raking_factor_decrease"] = overlay_gdf["raking_factor_decrease"].clip(-np.inf, 1)
-    overlay_gdf["raking_factor_increase"] = (
-        overlay_gdf["shape_population_prev"]
-        *
-        (STEP_LIMIT / overlay_gdf[f"shape_population_{model_time_point}"])
-        *
-        overlay_gdf["raking_factor_prev"]
-    )
-    overlay_gdf["raking_factor_increase"] = overlay_gdf["raking_factor_increase"].clip(1, np.inf)
+    # Step-limit bounds on raking factor:
+    # raked_pop_t = shape_pop_t * rf_t must stay in [raked_pop_prev/STEP_LIMIT, raked_pop_prev*STEP_LIMIT]
+    # where raked_pop_prev = shape_pop_prev * rf_prev (from the closest non-zero reference).
+    prev_mask = np.isfinite(raking_factor_prev)
+    raked_pop_prev = np.full_like(shape_population_prev, np.nan)
+    raked_pop_prev[prev_mask] = shape_population_prev[prev_mask] * raking_factor_prev[prev_mask]
 
-    # 2) splice together constrained raking factors based on whether data time point is increasing or decreasing
-    decrease = (
-        overlay_gdf[f"shape_population_{model_time_point}"]
-        <
-        overlay_gdf["shape_population_prev"]
+    # Only apply bounds when both the reference and the current prediction are valid.
+    shape_pop_current = overlay_gdf[f"shape_population_{model_time_point}"].to_numpy()
+    valid_ref = (shape_pop_current > 0) & np.isfinite(raked_pop_prev)
+    rf_lower = np.full_like(raking_factor_prev, 0.0)
+    rf_lower[valid_ref] = safe_divide(
+        raked_pop_prev[valid_ref],
+        shape_pop_current[valid_ref] * STEP_LIMIT
     )
-    if decrease.all():
-        overlay_gdf[f"raking_factor_{model_time_point}"] = (
-            overlay_gdf.loc[:, ["raking_factor_decrease", "raking_factor_prev"]].max(axis=1)
-        )
-    elif not decrease.any():
-        overlay_gdf[f"raking_factor_{model_time_point}"] = (
-            overlay_gdf.loc[:, ["raking_factor_increase", "raking_factor_prev"]].min(axis=1)
-        )
-    else:
-        overlay_gdf[f"raking_factor_{model_time_point}"] = pd.concat([
-            overlay_gdf.loc[decrease, ["raking_factor_decrease", "raking_factor_prev"]].max(axis=1),
-            overlay_gdf.loc[~decrease, ["raking_factor_increase", "raking_factor_prev"]].min(axis=1),
-        ]).sort_index()
-
-    # 3) replace infs with previous time point OR try directly calculating if previous is also inf
-    overlay_gdf.loc[
-        np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
-        f"raking_factor_{model_time_point}"
-    ] = overlay_gdf["raking_factor_prev"]
-    overlay_gdf["raking_factor_direct"] = safe_divide(
-        overlay_gdf["population_total"].astype(np.float32),
-        overlay_gdf[f"shape_population_{model_time_point}"],
+    rf_upper = np.full_like(raking_factor_prev, np.inf)
+    rf_upper[valid_ref] = safe_divide(
+        raked_pop_prev[valid_ref] * STEP_LIMIT,
+        shape_pop_current[valid_ref]
     )
-    overlay_gdf.loc[
-        np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
-        f"raking_factor_{model_time_point}"
-    ] = overlay_gdf["raking_factor_direct"]
-
-    overlay_gdf = overlay_gdf.drop(
-        ["shape_population_prev", "raking_factor_prev", "raking_factor_decrease", "raking_factor_increase", "raking_factor_direct"],
-        axis=1,
+    # Absolute cap: raked_pop_t <= step * STEP_LIMIT * census_population.
+    # Prevents unbounded compounding over many steps.
+    census_pop = overlay_gdf["population_total"].astype(np.float32).to_numpy()
+    rf_upper_abs = np.full_like(raking_factor_prev, np.inf)
+    rf_upper_abs[valid_ref] = safe_divide(
+        census_pop[valid_ref] * (step * STEP_LIMIT),
+        shape_pop_current[valid_ref]
     )
+    rf_upper = np.minimum(rf_upper, rf_upper_abs)
 
-    return overlay_gdf
+    # Target: rf_anchor, the first finite raking factor encountered stepping away from
+    # the census time point (passed in and maintained by the caller). Each step aims for
+    # this value so the raking factor converges back to the census-consistent level after
+    # large model jumps instead of staying permanently offset.
+    # Where rf_anchor is still inf/nan (no finite step seen yet), fall back to
+    # raking_factor_direct so zero-to-nonzero transitions are treated independently.
+    valid_direct = shape_pop_current > 0
+    raking_factor_direct = np.full_like(raking_factor_prev, np.inf)
+    raking_factor_direct[valid_direct] = safe_divide(
+        overlay_gdf["population_total"].astype(np.float32).to_numpy()[valid_direct],
+        shape_pop_current[valid_direct],
+    )
+    valid_anchor = np.isfinite(rf_anchor)
+    rf_target = np.where(valid_anchor, rf_anchor, raking_factor_direct)
+    overlay_gdf[f"raking_factor_{model_time_point}"] = np.clip(rf_target, rf_lower, rf_upper)
+
+    # Replace any remaining inf/nan (shape_pop=0 at this step) with raking_factor_direct,
+    # which will itself be inf when shape_pop=0 — those get zeroed out later.
+    invalid_rf = ~np.isfinite(overlay_gdf[f"raking_factor_{model_time_point}"])
+    overlay_gdf.loc[invalid_rf, f"raking_factor_{model_time_point}"] = raking_factor_direct[invalid_rf]
+
+    # Update anchor: fill in rows where we just computed the first finite raking factor.
+    new_rf = overlay_gdf[f"raking_factor_{model_time_point}"].to_numpy()
+    rf_anchor = np.where(~np.isfinite(rf_anchor) & np.isfinite(new_rf), new_rf, rf_anchor)
+
+    return overlay_gdf, rf_anchor
 
 
 def generate_and_apply_raking_factors(
@@ -446,17 +434,22 @@ def generate_and_apply_raking_factors(
     ]
     pre_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points)) if i[0] >= 0]
     post_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points), reverse=True) if i[0] <= 0]
+    # rf_anchor: per-row target raking factor, initialized from the census time point
+    # and updated to the first finite value encountered as we step away from it.
+    rf_anchor_init = overlay_gdf[f"raking_factor_{census_time_point}"].to_numpy().copy()
     for sorted_model_time_points in [pre_sorted_model_time_points, post_sorted_model_time_points]:
+        rf_anchor = rf_anchor_init.copy()
         for i in range(1, len(sorted_model_time_points)):
-            overlay_gdf = calculate_time_point_raking_factor(
+            overlay_gdf, rf_anchor = calculate_time_point_raking_factor(
                 overlay_gdf,
                 sorted_model_time_points,
                 i,
+                rf_anchor,
             )
 
     for model_time_point in model_time_points:
         overlay_gdf.loc[
-            np.isinf(overlay_gdf[f"raking_factor_{model_time_point}"]),
+            ~np.isfinite(overlay_gdf[f"raking_factor_{model_time_point}"]),
             f"raking_factor_{model_time_point}"
         ] = 0
         overlay_gdf[f"raked_pixel_population_{model_time_point}"] = overlay_gdf[f"covered_pixel_population_{model_time_point}"] * overlay_gdf[f"raking_factor_{model_time_point}"]

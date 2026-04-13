@@ -14,6 +14,14 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.model.modeling.datamodel import ModelSpecification
 from rra_population_model.postprocess.census_rake import utils
 
+# resolution: str = "40"
+# version: str = "2026_03_11.001"
+# iso3: str = "USA"
+# census_time_point: str = "2020q1"
+# task_parent_id: str = "02180000200"
+# output_dir: str | Path = pmc.MODEL_ROOT
+# verbose: bool = True
+
 
 def census_rake_main(
     resolution: str,

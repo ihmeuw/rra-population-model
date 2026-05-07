@@ -101,8 +101,8 @@ def metrics(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "15G",
-            "runtime": "60m",
+            "memory": "20G",
+            "runtime": "10m",
             "project": "proj_rapidresponse",
         },
         node_args={

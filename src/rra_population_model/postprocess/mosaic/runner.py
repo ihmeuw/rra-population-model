@@ -142,7 +142,7 @@ def mosaic(
             "queue": queue,
             "cores": num_cores,
             "memory": "160G",
-            "runtime": "15m",
+            "runtime": "20m",
             "project": "proj_rapidresponse",
         },
         node_args={

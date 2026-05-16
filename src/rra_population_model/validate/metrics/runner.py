@@ -158,7 +158,9 @@ def metrics(
 
     time_points = pm_data.list_raked_prediction_time_points(resolution, version)
     time_points = [time_point for time_point in time_points if time_point.endswith("q1")]
-    if time_point not in time_points:
+    if time_point in time_points:
+        time_points = [time_point]
+    elif time_point is not None:
         msg = (
             f"Time point {time_point} not found in {resolution} {version}.\n"
             f"Valid time points are: {time_points}"
@@ -183,13 +185,13 @@ def metrics(
         node_args={
             "block-key": block_keys,
             # "version": versions,
-            # "time-point": time_points,
+            "time-point": time_points,
         },
         task_args={
             "version": version,
             "resolution": resolution,
             "output-dir": output_dir,
-            "time-point": time_point,
+            # "time-point": time_point,
         },
         max_attempts=3,
         log_root=pm_data.log_dir("validate_pixel_metrics"),

@@ -14,7 +14,7 @@ from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import get_prediction_time_point
 
-RAKING_VERSION = "gbd_2023"
+RAKING_VERSION = "fhs_2023"
 
 
 def load_admin_populations(
@@ -227,7 +227,10 @@ def raking_factors(
 ) -> None:
     pm_data = PopulationModelData(output_dir)
     if input_data == "raw":
-        if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
+        if (
+            pm_data.raked_predictions_root(resolution, version).exists()
+            and len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0
+        ):
             raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
     elif input_data not in ["raked"]:
         raise ValueError(f'Invalid `input_data` type: {input_data}')
@@ -245,17 +248,28 @@ def raking_factors(
     # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
     # time_points = ["2020q1", "2020q2"]
 
-    print(f"Building raking factors for {len(time_points)} time points.")
-    jobmon.run_parallel(
-        runner="pmtask postprocess",
-        task_name="raking_factors",
-        task_resources={
+    if resolution == "40":
+        task_resources = {
             "queue": queue,
             "cores": num_cores,
             "memory": f"{num_cores * 5}G",
             "runtime": "60m",
             "project": "proj_rapidresponse",
-        },
+        }
+    elif resolution == "100":
+        task_resources = {
+            "queue": queue,
+            "cores": num_cores,
+            "memory": f"{int(num_cores * 2.5)}G",
+            "runtime": "20m",
+            "project": "proj_rapidresponse",
+        }
+
+    print(f"Building raking factors for {len(time_points)} time points.")
+    jobmon.run_parallel(
+        runner="pmtask postprocess",
+        task_name="raking_factors",
+        task_resources=task_resources,
         node_args={
             # "version": versions,
             "time-point": time_points,

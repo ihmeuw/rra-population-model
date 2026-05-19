@@ -86,7 +86,7 @@ def raking_data_main(
 @click.command()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_choice(
-    "out_version", allow_all=False, choices=["gbd_2023", "gbd_2021", "fhs_2021"]
+    "out_version", allow_all=False, choices=["gbd_2023", "gbd_2021", "fhs_2021", "fhs_2023"]
 )
 def raking_data(
     output_dir: str,

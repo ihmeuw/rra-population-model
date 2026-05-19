@@ -36,13 +36,15 @@ def mosaic_main(
         if block_key not in block_keys:
             continue
         pop_paths.append(pm_data.raked_prediction_path(block_key, time_point, model_spec))
-        denom_paths.append(pm_data.feature_path(resolution, block_key, model_spec.denominator, time_point))
-        # poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
+        if resolution == "40":
+            denom_paths.append(pm_data.feature_path(resolution, block_key, model_spec.denominator, time_point))
+            # poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
 
     print("loading rasters")
     pop_raster = rt.load_mf_raster(pop_paths)
-    denom_raster = rt.load_mf_raster(denom_paths)
-    # poverty_raster = rt.load_mf_raster(poverty_paths)
+    if resolution == "40":
+        denom_raster = rt.load_mf_raster(denom_paths)
+        # poverty_raster = rt.load_mf_raster(poverty_paths)
 
     print("writing cog")
     group_key = f"G-{bx:>04}X-{by:>04}Y"
@@ -65,15 +67,15 @@ def mosaic_main(
             num_cores=num_cores,
             resampling="average",
         )
-    # pm_data.save_compiled_prediction(
-    #     raster=poverty_raster,
-    #     group_key=group_key,
-    #     time_point=time_point,
-    #     model_spec=model_spec,
-    #     measure="poverty",
-    #     num_cores=num_cores,
-    #     resampling="average",
-    # )
+        # pm_data.save_compiled_prediction(
+        #     raster=poverty_raster,
+        #     group_key=group_key,
+        #     time_point=time_point,
+        #     model_spec=model_spec,
+        #     measure="poverty",
+        #     num_cores=num_cores,
+        #     resampling="average",
+        # )
 
 
 @click.command()
@@ -134,17 +136,28 @@ def mosaic(
     bxs = list(range(x_max // STRIDE + int(bool(x_max % STRIDE))))
     bys = list(range(y_max // STRIDE + int(bool(y_max % STRIDE))))
 
-    print("Compiling")
-    jobmon.run_parallel(
-        runner="pmtask postprocess",
-        task_name="mosaic",
-        task_resources={
+    if resolution == "40":
+        task_resources = {
             "queue": queue,
             "cores": num_cores,
             "memory": "160G",
             "runtime": "20m",
             "project": "proj_rapidresponse",
-        },
+        }
+    elif resolution == "100":
+        task_resources = {
+            "queue": queue,
+            "cores": num_cores,
+            "memory": "120G",
+            "runtime": "10m",
+            "project": "proj_rapidresponse",
+        }
+
+    print("Compiling")
+    jobmon.run_parallel(
+        runner="pmtask postprocess",
+        task_name="mosaic",
+        task_resources=task_resources,
         node_args={
             "bx": bxs,
             "by": bys,
@@ -175,7 +188,7 @@ def mosaic(
     if resolution == "40":
         measures = ["population", "building", "change"]  # , "poverty"
     else:
-        measures = ["population"]  # , "poverty"
+        measures = ["population"]
     for measure in measures:
         measure_time_points = pm_data.list_compiled_prediction_time_points(resolution, version, measure)
         utils.make_vrts(

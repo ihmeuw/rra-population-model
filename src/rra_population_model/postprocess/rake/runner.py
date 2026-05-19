@@ -181,6 +181,23 @@ def rake(
     # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
     # time_points = ["2020q1", "2020q2"]
 
+    if resolution == "40":
+        task_resources = {
+            "queue": queue,
+            "cores": 1,
+            "memory": "5G",
+            "runtime": "5m",
+            "project": "proj_rapidresponse",
+        }
+    elif resolution == "100":
+        task_resources = {
+            "queue": queue,
+            "cores": 1,
+            "memory": "4G",
+            "runtime": "3m",
+            "project": "proj_rapidresponse",
+        }
+
     print(f"Raking {len(block_keys) * len(time_points)} blocks")
     # for time_point in time_points:
     # print("##############################################################")
@@ -188,13 +205,7 @@ def rake(
     jobmon.run_parallel(
         runner="pmtask postprocess",
         task_name="rake",
-        task_resources={
-            "queue": queue,
-            "cores": 1,
-            "memory": "5G",
-            "runtime": "5m",
-            "project": "proj_rapidresponse",
-        },
+        task_resources=task_resources,
         node_args={
             # "version": versions,
             "block-key": block_keys,

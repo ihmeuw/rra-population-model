@@ -133,8 +133,17 @@ def get_tile_feature_gdf(
 
     tile_features = {}
     for feature_name in training_meta.features:
-        tile_features[feature_name] = pm_data.load_feature(
-            feature_name=feature_name,
+        # overture features
+        if feature_name.startswith("or") or feature_name.startswith("ow") or feature_name.startswith("log_or") or feature_name.startswith("log_ow"):
+            block_key = tile_meta.block_key
+            overture_root = f"/mnt/share/scratch/users/mfiking/overture/features/2020q2/{block_key}/"
+            overture_path = overture_root + f"{feature_name}.tif"
+            subset_bounds = tile_meta.polygon.bounds
+            feature = rt.load_raster(overture_path, subset_bounds)
+            tile_features[feature_name] = feature
+        else:
+            tile_features[feature_name] = pm_data.load_feature(
+                feature_name=feature_name,
             subset_bounds=tile_meta.polygon,
             **kwargs,
         )

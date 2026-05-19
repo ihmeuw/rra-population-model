@@ -516,7 +516,10 @@ class PopulationModelData:
         self, resolution: str, block_key: str, time_point: str
     ) -> list[str]:
         block_dir = self.feature_path(resolution, block_key, "", time_point).parent
-        return [p.stem for p in block_dir.glob("*.tif")]
+
+        # overture features 
+        overture_root = Path("/mnt/share/scratch/users/mfiking/overture/features/2020q2") / block_key
+        return [p.stem for p in block_dir.glob("*.tif")] + [p.stem for p in overture_root.glob("*.tif")]
 
     def load_feature(
         self,

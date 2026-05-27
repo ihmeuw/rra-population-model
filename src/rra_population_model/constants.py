@@ -101,7 +101,7 @@ for built_version in BUILT_VERSIONS.values():
     for denominator in [
         "density",
         "volume",
-        # "residential_density",
+        "residential_density",
         "residential_volume",
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401

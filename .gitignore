@@ -85,3 +85,6 @@ venv.bak/
 /notebooks
 
 *core
+
+# VS Code settings
+.vscode/

@@ -1005,6 +1005,23 @@ class PopulationModelData:
         mkdir(out_path.parent, exist_ok=True, parents=True)
         save_raster(raster, out_path)
 
+    @property
+    def population_covariates(self) -> Path:
+        return pmc.POPULATION_COVARIATE_ROOT
+
+    @property
+    def overture_covariates(self) -> Path:
+        return self.population_covariates / "overture"
+
+    def list_overture_covariates(self) -> dict[str, list[str]]:
+        covariates = {}
+        for overture_class_dir in self.overture_covariates.iterdir():
+            if overture_class_dir.is_dir():
+                overture_class = overture_class_dir.name
+                overture_types = [f.stem for f in overture_class_dir.glob("*.parquet")]
+                covariates[overture_class] = sorted(overture_types)
+        return covariates
+
 
 def bounds_to_bbox(bounds: Bounds | None) -> BBox | None:
     if isinstance(bounds, shapely.Polygon | shapely.MultiPolygon):

@@ -14,6 +14,9 @@ GEOSPATIAL_COVARIATES_ROOT = Path("/snfs1/WORK/11_geospatial/01_covariates")
 BUILDING_DENSITY_ROOT = RRA_ROOT / "pub" / "building-density"
 POPULATION_DATA_ROOT = RRA_ROOT / "pub" / "population" / "data" / "02-processed-data"
 MODEL_ROOT = RRA_ROOT / "pub" / "population-model"
+POPULATION_COVARIATE_ROOT = (
+    RRA_ROOT / "pub" / "population" / "data" / "02-processed-data" / "covariates"
+)
 
 
 class RESOLUTIONS(StrEnum):

@@ -88,4 +88,6 @@ venv.bak/
 
 *core
 
-*.vscode*
+# VS Code Settings
+.vscode/
+.claude/

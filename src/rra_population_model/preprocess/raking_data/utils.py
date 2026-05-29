@@ -68,7 +68,7 @@ def load_ihme_populations(
     populations = {
         "gbd": pm_data.load_gbd_raking_input("population", f"gbd_{gbd_version}"),
     }
-    if gbd_version == "2021":
+    if gbd_version in ["2021", "2023"]:
         populations["fhs"] = pm_data.load_gbd_raking_input(
             "population", f"fhs_{gbd_version}"
         )
@@ -81,7 +81,7 @@ def load_hierarchies(
     hierarchies = {
         "gbd": pm_data.load_gbd_raking_input("hierarchy", f"gbd_{gbd_version}"),
     }
-    if gbd_version == "2021":
+    if gbd_version in ["2021", "2023"]:
         hierarchies["fhs"] = pm_data.load_gbd_raking_input(
             "hierarchy", f"fhs_{gbd_version}"
         )

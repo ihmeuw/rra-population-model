@@ -327,7 +327,13 @@ def generate_overture_features(
             block_key=feature_metadata.block_key,
             resolution=feature_metadata.resolution,
         )
-
+        pm_data.link_feature(
+            source_path=feature_path,
+            feature_name=f"log_{feature_name}",
+            time_point=time_point,
+            block_key=feature_metadata.block_key,
+            resolution=feature_metadata.resolution,
+        )
 
 def process_overture(
     feature_metadata: FeatureMetadata,

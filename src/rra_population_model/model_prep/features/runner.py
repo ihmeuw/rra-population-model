@@ -173,29 +173,56 @@ def features(
     njobs = len(block_keys) * len(time_point)
     print(f"Submitting {njobs} jobs to process features")
 
-    jobmon.run_parallel(
-        runner="pmtask model_prep",
-        task_name="features",
-        node_args={
-            "block-key": block_keys,
-            "time-point": time_point,
-        },
-        task_args={
-            "building-density-dir": building_density_dir,
-            "output-dir": output_dir,
-            "resolution": resolution,
-        },
-        task_resources={
-            "queue": queue,
-            "cores": 1,
-            "memory": "6G",
-            "runtime": "6m",
-            "project": "proj_rapidresponse",
-            "constraints": "archive",
-        },
-        log_root=pm_data.log_dir("preprocess_features"),
-        max_attempts=3,
-    )
+    if "2020q2" in time_point:
+        # jobs that do overture processing need more resources
+        jobmon.run_parallel(
+            runner="pmtask model_prep",
+            task_name="features",
+            node_args={
+                "block-key": block_keys,
+                "time-point": ["2020q2"],
+            },
+            task_args={
+                "building-density-dir": building_density_dir,
+                "output-dir": output_dir,
+                "resolution": resolution,
+            },
+            task_resources={
+                "queue": queue,
+                "cores": 1,
+                "memory": "66G",
+                "runtime": "120m",
+                "project": "proj_rapidresponse",
+                "constraints": "archive",
+            },
+            log_root=pm_data.log_dir("preprocess_features"),
+            max_attempts=3,
+        )
+    time_point_excl = [tp for tp in time_point if tp != "2020q2"]
+    if time_point_excl:
+        jobmon.run_parallel(
+            runner="pmtask model_prep",
+            task_name="features",
+            node_args={
+                "block-key": block_keys,
+                "time-point": time_point_excl,
+            },
+            task_args={
+                "building-density-dir": building_density_dir,
+                "output-dir": output_dir,
+                "resolution": resolution,
+            },
+            task_resources={
+                "queue": queue,
+                "cores": 1,
+                "memory": "6G",
+                "runtime": "6m",
+                "project": "proj_rapidresponse",
+                "constraints": "archive",
+            },
+            log_root=pm_data.log_dir("preprocess_features"),
+            max_attempts=3,
+        )
 
 
 @click.command()

@@ -288,6 +288,27 @@ def process_model_gdf(
         for measure in keep_measures:
             model_gdf[f"{measure}_{denominator}"] = denominator_df[measure]
 
+    # Aggregate microsoft_v8 and ghsl_r2023a features to the admin level to get the denominator of total volume for each admin first,
+    # then use that to weigh the overature features to the admin level.
+
+    admin_id = model_gdf["admin_id"]
+    volume_weights = ["microsoft_v8_volume", "ghsl_r2023a_volume"]
+    weighted_features = [
+        f for f in training_meta.features if f.startswith(("or_", "ow_"))
+    ]
+    for volume in volume_weights:
+        weight = model_gdf[f"pixel_{volume}"] * model_gdf["isection_area"]
+        weight_sum = weight.groupby(admin_id).transform("sum")
+        for feature in weighted_features:
+            weighted_sum = (
+                (model_gdf[f"pixel_{feature}"] * weight)
+                .groupby(admin_id)
+                .transform("sum")
+            )
+            model_gdf[f"admin_{feature}_{volume}"] = safe_divide(
+                weighted_sum, weight_sum
+            )
+
     for feature in training_meta.features:
         model_gdf[f"admin_{feature}"] = (
             model_gdf[f"pixel_{feature}"] * model_gdf["admin_area_weight"]

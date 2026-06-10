@@ -13,6 +13,7 @@ from rra_population_model.data import (
 )
 
 REFERENCE_BUILDING_VERSION = "microsoft_v8"
+REFERENCE_TIME_POINT = "2020q2"
 
 
 class FeatureMetadata(NamedTuple):
@@ -49,7 +50,7 @@ def get_feature_metadata(
         provider=REFERENCE_BUILDING_VERSION,
         measure="density",
         resolution=resolution,
-        time_point="2023q4",
+        time_point=REFERENCE_TIME_POINT,
         block_key=block_key,
     )
     return FeatureMetadata(

@@ -153,16 +153,15 @@ class RRAPopulationData:
         iso3: str,
         year: str | int,
         state: str | None = None,
-        purpose: str = "training",
     ) -> Path:
-        shapefile_dir = self.shapefiles / purpose / iso3 / str(year)
+        shapefile_dir = self.shapefiles / iso3 / str(year)
         if state:
             return shapefile_dir / state
         return shapefile_dir
 
-    def list_shapefile_years(self, purpose: str = "training") -> list[tuple[str, str]]:
+    def list_shapefile_years(self) -> list[tuple[str, str]]:
         """List all available shapefile years by country."""
-        return self._list_years(self.shapefiles / purpose)
+        return self._list_years(self.shapefiles)
 
     def load_shapefile(
         self,
@@ -170,7 +169,6 @@ class RRAPopulationData:
         iso3: str,
         year: str | int,
         state: str | None = None,
-        purpose: str = "training",
     ) -> gpd.GeoDataFrame:
         """Load administrative boundary data from a shapefile.
 
@@ -184,24 +182,22 @@ class RRAPopulationData:
             The year represented by the shapefile boundaries.
         state
             State or province name. Optional.
-        purpose
-            Shapefile purpose - training or raking.
 
         Returns
         -------
         gpd.GeoDataFrame
             Administrative boundary data.
         """
-        shape_root = self.get_shapefile_dir(iso3, year, state, purpose=purpose)
+        shape_root = self.get_shapefile_dir(iso3, year, state)
         path = shape_root / f"admin{admin_level}.parquet"
         gdf = gpd.read_parquet(path)
         return gdf
 
     def list_admin_levels(
-        self, iso3: str, year: str | int, purpose: str = "training"
+        self, iso3: str, year: str | int
     ) -> list[int]:
         """List all available administrative levels for a country and year."""
-        shapefile_dir = self.get_shapefile_dir(iso3, year, purpose=purpose)
+        shapefile_dir = self.get_shapefile_dir(iso3, year)
         admin_levels = [
             admin_level
             for admin_level in range(10)

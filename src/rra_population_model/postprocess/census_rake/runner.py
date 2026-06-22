@@ -14,11 +14,14 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.model.modeling.datamodel import ModelSpecification
 from rra_population_model.postprocess.census_rake import utils
 
+# 0 = don't downsample; 1+ = number of admin-years to run
+DOWNSAMPLE_ADMINS = 0
+
 # resolution: str = "40"
-# version: str = "2026_03_11.001"
-# iso3: str = "USA"
-# census_time_point: str = "2020q1"
-# task_parent_id: str = "02180000200"
+# version: str = "2026_05_06.001"
+# iso3: str = "CAN"  # "USA"
+# census_time_point: str = "2021q1"  # "2020q1"
+# task_parent_id: str = "2021S051361060141032"  # "02180000200"
 # output_dir: str | Path = pmc.MODEL_ROOT
 # verbose: bool = True
 
@@ -192,8 +195,8 @@ def build_workflows(
         },
         "max_attempts": 3,
         "resource_scales": {
-            "memory":  iter([60     , 240     ]),  # G
-            "runtime": iter([60 * 60, 120 * 60]),  # seconds
+            "memory":  iter([60     , 180     ]),  # G
+            "runtime": iter([60 * 60, 180 * 60]),  # seconds
         },
     }
     task_idx = (
@@ -298,9 +301,10 @@ def census_rake(
         census_tasks = (
             workflow["task_idx"]
             .drop(complete_census_tasks, errors="ignore")
-            .to_list()
         )
-        # census_tasks = census_tasks.to_frame().sample(10_000).sort_index().index.tolist()
+        if DOWNSAMPLE_ADMINS > 0:
+            census_tasks = census_tasks.to_frame().sample(DOWNSAMPLE_ADMINS).sort_index().index
+        census_tasks = census_tasks.tolist()
 
         if len(census_tasks) > 0:
             print(

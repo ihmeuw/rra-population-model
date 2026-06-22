@@ -193,9 +193,6 @@ def training_data(
         msg = f"Workflow failed with status {status}."
         raise RuntimeError(msg)
 
-    if purpose == 'training':
-        print("Building summary datasets.")
-        people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
-        pm_data.save_summary_people_per_structure(people_per_structure, resolution)
-    elif purpose != 'inference':
-        raise ValueError(f'Unexpected data purpose: {purpose}')
+    print("Building summary datasets.")
+    people_per_structure = utils.build_summary_people_per_structure(pm_data, resolution)
+    pm_data.save_summary_people_per_structure(people_per_structure, resolution)

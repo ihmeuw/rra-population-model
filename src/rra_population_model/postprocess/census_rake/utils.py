@@ -112,10 +112,10 @@ def generate_census_inputs(
     available_census_years = pm_data.list_census_data()
 
     keep_iso3s = [
-        "AUS", "ARG", "BRA", "CAN", "CZE", "ESP", "GRC", "ISL", 
-        "MDV", "MEX", "MLT", "MYS", "NPL", "PAN", "POL", "PRT",
-        "QAT", "ROU", "RWA", "SVK", "TLS", "TON", "TZA", "VUT",
-        "USA", "ZAF",
+        "ARG", "AUS", "BGD", "BRA", "CAN", "CZE", "DOM", "ECU", "ESP",
+        "GRC", "ISL", "JAM", "LBR", "MDV", "MEX", "MLT", "MYS", "NPL",
+        "PAN", "POL", "PRT", "QAT", "ROU", "RWA", "SVK", "TJK", "TLS",
+        "TON", "TZA", "VUT", "USA", "UGA", "ZAF",
     ]
     data_years = [
         i for i in available_census_years

@@ -113,8 +113,8 @@ def comparison_validation(
         },
         max_attempts=3,
         resource_scales={
-            "memory":  iter([60     , 220     ]),  # G
-            "runtime": iter([10 * 60, 30 * 60 ]),  # seconds
+            "memory":  iter([60     , 240     ]),  # G
+            "runtime": iter([10 * 60, 60 * 60 ]),  # seconds
         },
         log_root=pm_data.log_dir("validate_comparison"),
     )

@@ -24,7 +24,7 @@ def filter_iso3_year_list(
         hard_skip = (iso3, year) in skip_list
         # Need to have at least admin 0 and admin 1 to make plots
         admin_levels = pop_data.list_admin_levels(iso3, year)
-        bad_admins = not ({0, 1} < set(admin_levels))
+        bad_admins = not ({0} < set(admin_levels))
         if not (hard_skip or bad_admins):
             out_list.append((iso3, year))
     return out_list

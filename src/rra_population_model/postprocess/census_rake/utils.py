@@ -345,14 +345,14 @@ def calculate_time_point_raking_factor(
     # Find the closest non-zero previous time point as the step-limit reference.
     # A zero shape_population reference collapses raked_pop_prev to zero, which
     # would force raked_pop_t to zero even after predictions recover.
-    shape_population_prev = overlay_gdf[f"shape_population_{prev_model_time_point}"].to_numpy()
-    raking_factor_prev = overlay_gdf[f"raking_factor_{prev_model_time_point}"].to_numpy()
+    shape_population_prev = overlay_gdf[f"shape_population_{prev_model_time_point}"].to_numpy(copy=True)
+    raking_factor_prev = overlay_gdf[f"raking_factor_{prev_model_time_point}"].to_numpy(copy=True)
     for earlier_tp in reversed(sorted_model_time_points[:step - 1]):
         still_zero = (shape_population_prev == 0) & (overlay_gdf[f"shape_population_{model_time_point}"].to_numpy() != 0)
         if not still_zero.any():
             break
-        shape_population_prev[still_zero] = overlay_gdf.loc[still_zero, f"shape_population_{earlier_tp}"].to_numpy()
-        raking_factor_prev[still_zero] = overlay_gdf.loc[still_zero, f"raking_factor_{earlier_tp}"].to_numpy()
+        shape_population_prev[still_zero] = overlay_gdf.loc[still_zero, f"shape_population_{earlier_tp}"].to_numpy(copy=True)
+        raking_factor_prev[still_zero] = overlay_gdf.loc[still_zero, f"raking_factor_{earlier_tp}"].to_numpy(copy=True)
 
     # Step-limit bounds on raking factor:
     # raked_pop_t = shape_pop_t * rf_t must stay in [raked_pop_prev/STEP_LIMIT, raked_pop_prev*STEP_LIMIT]

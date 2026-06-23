@@ -14,7 +14,7 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.model.modeling.datamodel import ModelSpecification
 from rra_population_model.postprocess.census_rake import utils
 
-# 0 = don't downsample; 1+ = number of admin-years to run
+# 0 = don't downsample; 1+ = number of downsampled admin-years to run
 DOWNSAMPLE_ADMINS = 0
 
 # resolution: str = "40"

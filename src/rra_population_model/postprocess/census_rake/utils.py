@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Any
 
 import geopandas as gpd
@@ -304,17 +305,37 @@ def process_census_data(
         no_data_value = prediction_raster.no_data_value
         if not np.isnan(no_data_value):
             raise ValueError("Unexpected no_data_value")
-        prediction_raster = rt.RasterArray(
-            np.where(
-                np.isnan(prediction_array), no_data_value, 0
+        valid_mask = ~np.isnan(prediction_array)
+        if not valid_mask.any():
+            # No predicted pixels in the admin (e.g. an all-water maritime/Antarctic
+            # claim). Write a minimal 1x1 all-nodata raster instead of the full box:
+            # the output tif still exists -- so a *missing* tif unambiguously means a
+            # failed job, not an empty admin -- but it's tiny, and the rake stage
+            # drops all-nodata rasters from its merge so it contributes nothing.
+            template_raster = rt.RasterArray(
+                np.full((1, 1), no_data_value, dtype=prediction_array.dtype),
+                transform=prediction_raster.transform,
+                crs=prediction_raster.crs,
+                no_data_value=no_data_value,
             )
-            .astype(prediction_array.dtype),
-            transform=prediction_raster.transform,
-            crs=prediction_raster.crs,
-            no_data_value=no_data_value,
-        )
+        else:
+            template_raster = rt.RasterArray(
+                np.where(valid_mask, 0, no_data_value).astype(prediction_array.dtype),
+                transform=prediction_raster.transform,
+                crs=prediction_raster.crs,
+                no_data_value=no_data_value,
+            )
     else:
-        census_data = pm_data.load_census_data(task_map["iso3"], task_map["census_time_point"].split("q")[0])
+        # Read only the task parent's bounding box, not the whole country. The
+        # parent's most-detailed children are all inside the parent geometry (so
+        # inside its bbox), and task_admins is in the same CRS as the census
+        # parquet (ESRI:54034), so the parent geometry is a valid bbox. This is
+        # the dominant per-task memory cost (e.g. the full USA census is ~40 GB).
+        census_data = pm_data.load_census_data(
+            task_map["iso3"],
+            task_map["census_time_point"].split("q")[0],
+            bounds=task_map["geometry"],
+        )
         census_data = census_data.loc[
             census_data["admin_level"] == census_data["admin_level"].max()
         ]
@@ -333,22 +354,40 @@ def process_census_data(
             raise ValueError("Invalid admins remain")
         census_data["geometry"] = census_data["geometry"].map(lambda g: set_precision(g, 0.01))
 
-        # Keep predictions as a flat per-pixel table keyed by the raster's
-        # row-major index (pixel_id). We deliberately avoid polygonizing the
-        # grid here; build_overlay only needs geometry for border pixels.
-        pixel_populations = {}
-        for model_time_point in model_time_points:
-            prediction_raster = rt.merge([
+        # Only the covered pixels (interior + border of the census shapes, minus
+        # nodata) are ever used downstream. Compute them once from the overlay
+        # skeleton (built from the first time point) and keep populations for just
+        # those pixels, keyed by the raster's row-major index (pixel_id). This
+        # keeps peak memory ~ covered_pixels x n_time_points instead of
+        # box_pixels x n_time_points -- a win for admins whose bounding box is
+        # mostly nodata (e.g. lots of ocean). Relies on the time-invariant water
+        # mask documented above (covered pixels are fixed across time points).
+        def load_prediction(model_time_point: str) -> rt.RasterArray:
+            raster = rt.merge([
                 pm_data.load_raw_prediction(block_key, model_time_point, model_spec)
                 for block_key in block_keys
             ])
-            prediction_raster = prediction_raster.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
-            pixel_populations[f"pixel_population_{model_time_point}"] = prediction_raster.to_numpy().flatten()
-        prediction_data = pd.DataFrame(pixel_populations)
+            return raster.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
+
+        template_raster = load_prediction(model_time_points[0])
+        covered_pixel_ids = np.unique(
+            build_overlay_skeleton(census_data, template_raster)["pixel_id"].to_numpy()
+        )
+        pixel_populations = {}
+        for model_time_point in model_time_points:
+            prediction_raster = (
+                template_raster
+                if model_time_point == model_time_points[0]
+                else load_prediction(model_time_point)
+            )
+            pixel_populations[f"pixel_population_{model_time_point}"] = (
+                prediction_raster.to_numpy().flatten()[covered_pixel_ids]
+            )
+        prediction_data = pd.DataFrame(pixel_populations, index=covered_pixel_ids)
         prediction_data.index.name = "pixel_id"
         prediction_data = prediction_data.reset_index()
 
-    return census_data, prediction_data, prediction_raster
+    return census_data, prediction_data, template_raster
 
 
 def calculate_time_point_raking_factor(
@@ -479,14 +518,16 @@ def generate_and_apply_raking_factors(
     return overlay_gdf
 
 
-def build_overlay(
+def build_overlay_skeleton(
     census_data: gpd.GeoDataFrame,
-    prediction_data: pd.DataFrame,
     template_raster: rt.RasterArray,
 ) -> pd.DataFrame:
-    """Map census shapes onto prediction pixels via rasterization.
+    """Map census shapes onto prediction pixels via rasterization (geometry only).
 
-    Returns one row per (shape, pixel) intersection with its ``isection_area``.
+    Returns one row per (shape, pixel) intersection with its ``isection_area``,
+    ``pixel_area`` and ``population_total`` -- everything except the per-time-point
+    ``pixel_population`` columns, which ``build_overlay`` attaches afterwards.
+
     Interior pixels (no shape boundary passing through them) lie entirely within
     a single shape, so a rasterized center hit gives exact full coverage with no
     geometry work. Only border pixels (cost ~ perimeter, not area) are
@@ -577,9 +618,23 @@ def build_overlay(
     overlay["pixel_area"] = pixel_area
     overlay = overlay.merge(census[["shape_id", "population_total"]], on="shape_id", how="left")
 
+    return overlay
+
+
+def build_overlay(
+    census_data: gpd.GeoDataFrame,
+    prediction_data: pd.DataFrame,
+    template_raster: rt.RasterArray,
+) -> pd.DataFrame:
+    """Attach per-time-point pixel populations to the census/pixel overlay skeleton.
+
+    ``prediction_data`` only needs rows for the covered pixels (interior + border);
+    ``process_census_data`` already restricts it to those, which is what keeps peak
+    memory off the full bounding box.
+    """
+    overlay = build_overlay_skeleton(census_data, template_raster)
     pop_cols = [c for c in prediction_data.columns if c.startswith("pixel_population_")]
     overlay = overlay.merge(prediction_data[["pixel_id", *pop_cols]], on="pixel_id", how="left")
-
     return overlay
 
 
@@ -589,7 +644,15 @@ def rake(
     template_raster: rt.RasterArray,
     census_time_point: str,
     model_time_points: list[str],
-) -> list[rt.RasterArray]:
+) -> Iterator[rt.RasterArray]:
+    """Yield one raked raster per model time point, in ``model_time_points`` order.
+
+    A generator (not a list) so the caller can save and free each raster before
+    the next is built: peak output memory is a single box-sized raster instead of
+    ``n_time_points`` of them. The per-pixel raked values are summed once (over the
+    covered pixels only); only the final reshape to the full raster grid is done
+    one time point at a time.
+    """
     overlay_gdf = build_overlay(census_data, prediction_data, template_raster)
     overlay_gdf["pixel_coverage"] = safe_divide(
         overlay_gdf["isection_area"],
@@ -600,19 +663,17 @@ def rake(
         overlay_gdf, census_time_point, model_time_points
     )
 
-    idx = np.arange(template_raster.size)
-    overlay_gdf = (
+    raked_by_pixel = (
         overlay_gdf
         .loc[:, ["pixel_id"] + [f"raked_pixel_population_{model_time_point}" for model_time_point in model_time_points]]
         .groupby("pixel_id")
         .sum()
-        .sort_index()
-        .reindex(idx, fill_value=np.nan)
     )
-    raked_rasters = []
+    idx = np.arange(template_raster.size)
     for model_time_point in model_time_points:
         raked_population = (
-            overlay_gdf[f"raked_pixel_population_{model_time_point}"]
+            raked_by_pixel[f"raked_pixel_population_{model_time_point}"]
+            .reindex(idx, fill_value=np.nan)
             .to_numpy()
             .astype(np.float32)
             .reshape(template_raster.shape)
@@ -623,7 +684,4 @@ def rake(
             crs=template_raster.crs,
             no_data_value=np.nan,
         )
-        raked_raster = trim_null_edges(raked_raster)
-        raked_rasters.append(raked_raster)
-
-    return raked_rasters
+        yield trim_null_edges(raked_raster)

@@ -91,21 +91,28 @@ def rake_main(
             )
             census_population = []
             for iso3, shape_id, census_time_point in task_admins:
+                raked_census = pm_data.load_raked_census(
+                    iso3,
+                    shape_id,
+                    prediction_time_point,
+                    census_time_point,
+                    model_spec,
+                )
+                if np.isnan(raked_census.to_numpy()).all():
+                    # Admins with no predicted pixels write a minimal all-nodata
+                    # raster; drop it here (it contributes nothing and would only
+                    # inflate the merge extent). A *missing* tif raises above,
+                    # surfacing a failed job instead of silently dropping it.
+                    continue
                 census_population.append(
-                    pm_data.load_raked_census(
-                        iso3,
-                        shape_id,
-                        prediction_time_point,
-                        census_time_point,
-                        model_spec,
-                    )
+                    raked_census
                     *
                     census_weights.loc[iso3, prediction_time_point, census_time_point].item()
                 )
-            census_population = rt.merge(census_population, method="sum")
-            census_population = census_population.clip(block_geometry).mask(block_geometry)
-
-            raked = rt.merge([census_population, raked], method="first")
+            if census_population:
+                census_population = rt.merge(census_population, method="sum")
+                census_population = census_population.clip(block_geometry).mask(block_geometry)
+                raked = rt.merge([census_population, raked], method="first")
 
         elif input_data not in ["raked", "raw_skip"]:
             raise ValueError(f"Invalid `input_data` type: {input_data}")

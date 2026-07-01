@@ -42,7 +42,12 @@ def census_rake_main(
 
     if verbose:
         logger.info("Loading census inputs")
-    task_admins, census_weights = pm_data.load_census_raking_inputs(model_spec)
+    task_admins, census_weights = pm_data.load_census_raking_inputs(
+        model_spec,
+        iso3=iso3,
+        census_time_point=census_time_point,
+        task_parent_id=task_parent_id,
+    )
     task_map = task_admins.loc[[iso3], [census_time_point], [task_parent_id], :].reset_index().T[0].rename("task_arg")
     census_weights = census_weights.loc[iso3, :, census_time_point]["weight"]
     model_time_points = sorted(census_weights.index.to_list())
@@ -85,6 +90,9 @@ def census_rake_main(
                 model_spec,
             )
     else:
+        # No population: save the template for every time point. For an admin with
+        # no predicted pixels this is a minimal all-nodata raster (see
+        # process_census_data); otherwise a zero raster over the valid pixels.
         if verbose:
             logger.info("Saving rasters (no population)")
         for model_time_point in model_time_points:
@@ -130,85 +138,42 @@ def build_workflows(
     task_admins: gpd.GeoDataFrame, queue: str
 ) -> dict[str, dict[str, dict[str, str | int | dict] | pd.Series]]:
     task_admins = task_admins.reset_index("task_parent_level", drop=True)
+    common = {"queue": queue, "cores": 1, "project": "proj_rapidresponse"}
 
-    workflows = {}
-    # 1) no population
-    kwargs = {
-        "task_resources": {
-            "queue": queue,
-            "cores": 1,
-            "memory": "8G",
-            "runtime": "25m",
-            "project": "proj_rapidresponse",
-        },
-        "max_attempts": 3,
-        "resource_scales": {
-            "memory":  iter([40     , 80      ]),  # G
-            "runtime": iter([60 * 60, 120 * 60]),  # seconds
-        },
-    }
-    task_idx = (
-        task_admins
-        .loc[task_admins["population_total"] == 0]
-        .index
+    # Two memory drivers post-fix: (1) the per-country census-cache floor -- USA's
+    # 11.7 GB parquet lands every USA task at ~26 GB regardless of admin size; and
+    # (2) box arrays ~ bounds_area -- the pop=0 maritime/Antarctic singles at
+    # ~20-28 GB (they load the full box even to write a 1x1). Shape count barely
+    # matters now, so population is no longer a bucket axis.
+    is_big = (
+        (task_admins.index.get_level_values("iso3") == "USA")
+        | (task_admins["bounds_area"] > 5e11)
     )
-    workflows["no_population"] = {
-        "kwargs": kwargs,
-        "task_idx": task_idx,
-    }
-    task_admins = task_admins.drop(task_idx)
 
-    # 2) USA
-    kwargs = {
-        "task_resources": {
-            "queue": queue,
-            "cores": 1,
-            "memory": "54G",
-            "runtime": "25m",
-            "project": "proj_rapidresponse",
+    workflows = {
+        "big": {
+            "kwargs": {
+                "task_resources": {**common, "memory": "36G", "runtime": "45m"},
+                "max_attempts": 3,
+                "resource_scales": {
+                    "memory":  iter([54     , 72      ]),  # G
+                    "runtime": iter([90 * 60, 150 * 60]),  # seconds
+                },
+            },
+            "task_idx": task_admins.loc[is_big].index,
         },
-        "max_attempts": 2,
-        "resource_scales": {
-            "memory":  iter([80      ]),  # G
-            "runtime": iter([120 * 60]),  # seconds
-        },
-    }
-    task_idx = (
-        task_admins
-        .loc[["USA"]]
-        .index
-    )
-    workflows["populated_usa"] = {
-        "kwargs": kwargs,
-        "task_idx": task_idx,
-    }
-    task_admins = task_admins.drop(task_idx)
-
-    # 3) remainder
-    kwargs = {
-        "task_resources": {
-            "queue": queue,
-            "cores": 1,
-            "memory": "15G",
-            "runtime": "15m",
-            "project": "proj_rapidresponse",
-        },
-        "max_attempts": 3,
-        "resource_scales": {
-            "memory":  iter([60     , 180     ]),  # G
-            "runtime": iter([60 * 60, 180 * 60]),  # seconds
+        "standard": {
+            "kwargs": {
+                "task_resources": {**common, "memory": "18G", "runtime": "30m"},
+                "max_attempts": 3,
+                "resource_scales": {
+                    "memory":  iter([30     , 45      ]),  # G
+                    "runtime": iter([60 * 60, 120 * 60]),  # seconds
+                },
+            },
+            "task_idx": task_admins.loc[~is_big].index,
         },
     }
-    task_idx = (
-        task_admins
-        .index
-    )
-    workflows["populated_non_usa"] = {
-        "kwargs": kwargs,
-        "task_idx": task_idx,
-    }
-    task_admins = task_admins.drop(task_idx)
-
     return workflows
 
 
@@ -261,9 +226,13 @@ def census_rake(
     task_admins, census_weights = utils.generate_census_inputs(
         pm_data,
         start_level=2,
-        bounds_area_threshold=1e10,
+        # Coarser than the old (1e10, 20_000): post-fix, per-task memory is driven
+        # by the per-country census-cache floor + box arrays (~bounds_area), not
+        # shape count -- so we consolidate into fewer, bigger, longer jobs and pay
+        # the census-cache floor fewer times. Calibrate up further if there's headroom.
+        bounds_area_threshold=2e11,
         area_no_pop_threshold=1e12,
-        admins_threshold=20_000,
+        admins_threshold=100_000,
     )
     census_weights = census_weights.loc[:, time_points, :]
     check_time_points(census_weights)

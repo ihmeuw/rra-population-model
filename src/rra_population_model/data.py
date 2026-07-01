@@ -896,15 +896,37 @@ class PopulationModelData:
     def load_census_raking_inputs(
         self,
         model_spec: "ModelSpecification",
+        *,
+        iso3: str | None = None,
+        census_time_point: str | None = None,
+        task_parent_id: str | None = None,
     ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
+        """Load the census-raking task metadata.
+
+        A single parallel task only needs its own row; pass ``iso3`` (and
+        optionally ``census_time_point`` / ``task_parent_id``) to push those down
+        as a read filter and avoid materializing the full ~1.6 GB task_admins
+        parquet. With no filters the whole table is loaded (used by the rake stage,
+        which needs every task_admin intersecting a block).
+        """
         resolution = model_spec.resolution
         version = model_spec.model_version
         root = self.raked_census_root(resolution, version)
+        filters = [
+            (col, "==", val)
+            for col, val in [
+                ("iso3", iso3),
+                ("census_time_point", census_time_point),
+                ("task_parent_id", task_parent_id),
+            ]
+            if val is not None
+        ]
         task_admins = gpd.read_parquet(
-            root / "task_admins.parquet"
+            root / "task_admins.parquet", filters=filters or None
         )
+        weight_filters = [("iso3", "==", iso3)] if iso3 is not None else None
         census_weights = pd.read_parquet(
-            root / "weights.parquet"
+            root / "weights.parquet", filters=weight_filters
         )
         return task_admins, census_weights
 

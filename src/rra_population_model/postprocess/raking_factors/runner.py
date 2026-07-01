@@ -33,8 +33,8 @@ def load_admin_populations(
         if RAKING_VERSION == "gbd_2023":
             max_data_year = all_pop.index.get_level_values("year_id").max()
             next_year = year + 1
-            if next_year > 2026:
-                raise ValueError("Don't project beyond 2025")
+            if next_year > 2027:
+                raise ValueError("Don't project beyond 2026")
             if next_year > max_data_year:
                 prior_year_pop = all_pop.loc[max_data_year - (year - max_data_year)]
                 next_year_pop = all_pop.loc[max_data_year - (next_year - max_data_year)]

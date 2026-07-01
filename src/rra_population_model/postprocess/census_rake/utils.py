@@ -1,13 +1,14 @@
 from typing import Any
 
-from affine import Affine
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import rasterra as rt
-from shapely import set_precision
-from shapely.geometry import MultiPolygon, GeometryCollection
+from affine import Affine
+from rasterio import features
+from shapely import box, set_precision
+from shapely.geometry import GeometryCollection, MultiPolygon
 from shapely.ops import unary_union
 
 from rra_population_model import constants as pmc
@@ -258,6 +259,25 @@ def process_census_data(
     task_map: gpd.GeoSeries,
     model_time_points: list[str],
 ) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None, rt.RasterArray]:
+    """Load census shapes and the per-pixel prediction table for one task.
+
+    Assumes the prediction nodata footprint (the water mask) is time-invariant
+    across ``model_time_points``. That mask is produced upstream in the
+    building-density pipeline (a separate codebase), where it is a single static
+    raster applied to every time point, so the assumption holds today. Two places
+    here rely on it, and both would be wrong if it ever became time-varying:
+
+      * the no-population branch builds the saved footprint from
+        ``model_time_points[0]`` alone (and census_rake_main reuses it for every
+        time point);
+      * the populated branch returns the last time point's raster as the
+        ``template_raster``, whose valid mask ``build_overlay`` uses to decide
+        which pixels to keep for *all* time points. A pixel that were valid at
+        one time point but nodata at another would be mis-handled.
+
+    If the mask ever varies by time point, this stage must derive a per-time-point
+    valid mask instead.
+    """
     modeling_frame = pm_data.load_modeling_frame(resolution)
     model_spec = pm_data.load_model_specification(resolution, version)
     buffer_size = np.ceil(np.sqrt(int(resolution) ** 2 / 2))
@@ -273,6 +293,8 @@ def process_census_data(
     census_data: pd.DataFrame | None = None
     prediction_data: pd.DataFrame | None = None
     if task_map["population_total"] == 0:
+        # Footprint from one time point only; relies on the time-invariant water
+        # mask documented in this function's docstring.
         prediction_raster = rt.merge([
             pm_data.load_raw_prediction(block_key, model_time_points[0], model_spec)
             for block_key in block_keys
@@ -311,24 +333,20 @@ def process_census_data(
             raise ValueError("Invalid admins remain")
         census_data["geometry"] = census_data["geometry"].map(lambda g: set_precision(g, 0.01))
 
+        # Keep predictions as a flat per-pixel table keyed by the raster's
+        # row-major index (pixel_id). We deliberately avoid polygonizing the
+        # grid here; build_overlay only needs geometry for border pixels.
+        pixel_populations = {}
         for model_time_point in model_time_points:
             prediction_raster = rt.merge([
                 pm_data.load_raw_prediction(block_key, model_time_point, model_spec)
                 for block_key in block_keys
             ])
             prediction_raster = prediction_raster.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
-            if prediction_data is None:
-                prediction_data = (
-                    prediction_raster
-                    .to_gdf()
-                    .rename(columns={"value": f"pixel_population_{model_time_point}"})
-                )
-            else:
-                prediction_data[f"pixel_population_{model_time_point}"] = prediction_raster.to_numpy().flatten()
+            pixel_populations[f"pixel_population_{model_time_point}"] = prediction_raster.to_numpy().flatten()
+        prediction_data = pd.DataFrame(pixel_populations)
         prediction_data.index.name = "pixel_id"
         prediction_data = prediction_data.reset_index()
-        # prediction_data["geometry"] = prediction_data.geometry.map(lambda g: set_precision(g, 0.01))
-        prediction_data["pixel_area"] = prediction_data.area
 
     return census_data, prediction_data, prediction_raster
 
@@ -461,82 +479,118 @@ def generate_and_apply_raking_factors(
     return overlay_gdf
 
 
-def single_admin_overlay(
-    census_gdf: gpd.GeoDataFrame,
-    pixel_gdf: gpd.GeoDataFrame,
+def build_overlay(
+    census_data: gpd.GeoDataFrame,
+    prediction_data: pd.DataFrame,
     template_raster: rt.RasterArray,
 ) -> pd.DataFrame:
-    geometry = census_gdf.geometry.item()
+    """Map census shapes onto prediction pixels via rasterization.
 
-    # Infer square pixel dimensions from area.
-    pixel_area = float(pixel_gdf["pixel_area"].iloc[0])
-    buffer_size = np.ceil(np.sqrt(pixel_area / 2))
-    interior = geometry.buffer(-buffer_size)
-    if not interior.is_valid:
-        interior = interior.buffer(0)
+    Returns one row per (shape, pixel) intersection with its ``isection_area``.
+    Interior pixels (no shape boundary passing through them) lie entirely within
+    a single shape, so a rasterized center hit gives exact full coverage with no
+    geometry work. Only border pixels (cost ~ perimeter, not area) are
+    polygonized and exactly intersected, and a border pixel may split across
+    several shapes.
 
-    if interior.is_empty:
-        interior_valid = np.zeros(template_raster.shape, dtype=bool)
+    Nodata (e.g. water) pixels are dropped: they carry no prediction and would
+    only contribute zero. This makes multi-admin tasks match the behavior the
+    single-admin path already had (in-shape water -> NaN rather than 0).
+    """
+    out_shape = template_raster.shape
+    transform = template_raster.transform
+    crs = template_raster.crs
+    pixel_area = np.float32(abs(template_raster.x_resolution * template_raster.y_resolution))
+
+    valid = _get_valid_data_mask(
+        template_raster.to_numpy().astype(np.float32),
+        template_raster.no_data_value,
+    )
+
+    census = census_data.reset_index(drop=True)
+    shape_ids = census["shape_id"].to_numpy()
+    n_shapes = len(census)
+    id_dtype = "uint16" if n_shapes < np.iinfo(np.uint16).max else "uint32"
+
+    # Burn shape ids (1-based; 0 == no shape) by pixel center, then drop water.
+    assigned = features.rasterize(
+        ((geom, i + 1) for i, geom in enumerate(census.geometry.to_numpy())),
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        all_touched=False,
+        dtype=id_dtype,
+    )
+    assigned[~valid] = 0
+
+    # Any pixel a shape boundary touches needs an exact intersection.
+    border_mask = features.rasterize(
+        ((geom, 1) for geom in census.geometry.boundary.to_numpy()),
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        all_touched=True,
+        dtype="uint8",
+    ).astype(bool)
+    border_mask &= valid
+
+    # Interior pixels: full coverage, exactly one shape each, no geometry needed.
+    interior_idx = np.flatnonzero((assigned > 0) & ~border_mask)
+    interior = pd.DataFrame({
+        "pixel_id": interior_idx,
+        "shape_id": shape_ids[assigned.ravel()[interior_idx] - 1],
+        "isection_area": pixel_area,
+    })
+
+    # Border pixels: build cell polygons only here and intersect with the shapes.
+    border_idx = np.flatnonzero(border_mask)
+    if border_idx.size:
+        rows, cols = np.unravel_index(border_idx, out_shape)
+        a, b, c, d, e, f = (
+            transform.a, transform.b, transform.c,
+            transform.d, transform.e, transform.f,
+        )
+        x0 = a * cols + b * rows + c
+        y0 = d * cols + e * rows + f
+        x1 = a * (cols + 1) + b * (rows + 1) + c
+        y1 = d * (cols + 1) + e * (rows + 1) + f
+        boxes = box(
+            np.minimum(x0, x1), np.minimum(y0, y1),
+            np.maximum(x0, x1), np.maximum(y0, y1),
+        )
+        border_pixels = gpd.GeoDataFrame(
+            {"pixel_id": border_idx}, geometry=boxes, crs=crs
+        )
+        border = border_pixels.overlay(
+            census[["shape_id", "geometry"]],
+            how="intersection",
+            keep_geom_type=True,
+        )
+        border["isection_area"] = border.area.astype(np.float32)
+        border = border[["pixel_id", "shape_id", "isection_area"]]
     else:
-        interior_mask_raster = template_raster.mask(gpd.GeoSeries([interior], crs=census_gdf.crs))
-        interior_valid = _get_valid_data_mask(
-            interior_mask_raster.to_numpy().astype(np.float32),
-            interior_mask_raster.no_data_value
+        border = pd.DataFrame(
+            {"pixel_id": [], "shape_id": [], "isection_area": []}
         )
 
-    covered_area = np.zeros(len(pixel_gdf), dtype=np.float32)
+    overlay = pd.concat([interior, border], ignore_index=True)
+    overlay["pixel_area"] = pixel_area
+    overlay = overlay.merge(census[["shape_id", "population_total"]], on="shape_id", how="left")
 
-    interior_pixel_ids = np.flatnonzero(interior_valid.ravel())
-    full_rows = pixel_gdf["pixel_id"].isin(interior_pixel_ids)
+    pop_cols = [c for c in prediction_data.columns if c.startswith("pixel_population_")]
+    overlay = overlay.merge(prediction_data[["pixel_id", *pop_cols]], on="pixel_id", how="left")
 
-    covered_area[full_rows.to_numpy()] = pixel_area
-
-    # Use geometry predicates for border candidates to avoid mask discretization gaps.
-    try:
-        candidate_rows_arr = np.zeros(len(pixel_gdf), dtype=bool)
-        candidate_rows_arr[pixel_gdf.sindex.query(geometry, predicate="intersects")] = True
-        border_rows = pd.Series(candidate_rows_arr, index=pixel_gdf.index) & ~full_rows
-    except Exception:
-        border_rows = pixel_gdf.intersects(geometry) & ~full_rows
-
-    if border_rows.any():
-        border_geom = pixel_gdf.loc[border_rows, "geometry"]
-        border_geom = border_geom.intersection(geometry)
-        covered_area[border_rows.to_numpy()] = border_geom.area.to_numpy()
-        pixel_gdf.loc[border_rows, "geometry"] = border_geom
-
-    pixel_gdf["isection_area"] = covered_area
-    pixel_gdf["shape_id"] = census_gdf.shape_id.item()
-    pixel_gdf["population_total"] = census_gdf.population_total.item()
-
-    pixel_gdf = pixel_gdf.loc[pixel_gdf["isection_area"] > 0].drop("geometry", axis=1)
-
-    return pixel_gdf
+    return overlay
 
 
 def rake(
     census_data: gpd.GeoDataFrame,
-    prediction_data: gpd.GeoDataFrame,
+    prediction_data: pd.DataFrame,
     template_raster: rt.RasterArray,
     census_time_point: str,
     model_time_points: list[str],
 ) -> list[rt.RasterArray]:
-    if len(census_data) > 1:
-        overlay_gdf = (
-            census_data
-            .overlay(
-                prediction_data,
-                how="intersection",
-                keep_geom_type=True,
-            )
-        )
-        overlay_gdf["isection_area"] = overlay_gdf.area
-    else:
-        overlay_gdf = single_admin_overlay(
-            census_data.copy(),
-            prediction_data.copy(),
-            template_raster,
-        )
+    overlay_gdf = build_overlay(census_data, prediction_data, template_raster)
     overlay_gdf["pixel_coverage"] = safe_divide(
         overlay_gdf["isection_area"],
         overlay_gdf["pixel_area"],

@@ -93,7 +93,7 @@ def comparison_validation(
     census_tasks = pm_data.list_census_data()
     census_tasks = [
         i[:2] for i in census_tasks
-        if f"{i[1]}q{i[2]}" in pmc.MODELING_TIME_POINTS and int(i[1]) < 2023 and "_" not in i[0]
+        if f"{i[1]}q{i[2]}" in pmc.MODELING_TIME_POINTS and "_" not in i[0]
     ]
 
     jobmon.run_parallel(

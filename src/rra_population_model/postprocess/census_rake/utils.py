@@ -8,7 +8,7 @@ import pandas as pd
 import rasterra as rt
 from affine import Affine
 from rasterio import features
-from shapely import box, set_precision
+from shapely import area, box, intersection, set_precision
 from shapely.geometry import GeometryCollection, MultiPolygon
 from shapely.ops import unary_union
 
@@ -115,9 +115,9 @@ def generate_census_inputs(
 
     keep_iso3s = [
         "ARG", "AUS", "BGD", "BRA", "CAN", "CZE", "DOM", "ECU", "ESP",
-        "GRC", "ISL", "JAM", "LBR", "MDV", "MEX", "MLT", "MYS", "NPL",
-        "PAN", "POL", "PRT", "QAT", "ROU", "RWA", "SVK", "TJK", "TLS",
-        "TON", "TZA", "VUT", "USA", "UGA", "ZAF",
+        "GRC", "ISL", "JAM", "KIR", "LBR", "MDV", "MEX", "MLT", "MYS",
+        "NPL", "PAN", "POL", "PRT", "QAT", "ROU", "RWA", "SVK", "TJK",
+        "TLS", "TON", "TZA", "VUT", "USA", "UGA", "ZAF",
     ]
     data_years = [
         i for i in available_census_years
@@ -259,8 +259,8 @@ def process_census_data(
     pm_data: PopulationModelData,
     task_map: gpd.GeoSeries,
     model_time_points: list[str],
-) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None, rt.RasterArray]:
-    """Load census shapes and the per-pixel prediction table for one task.
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None, rt.RasterArray]:
+    """Build the census/pixel overlay skeleton and per-pixel prediction table.
 
     Assumes the prediction nodata footprint (the water mask) is time-invariant
     across ``model_time_points``. That mask is produced upstream in the
@@ -291,7 +291,7 @@ def process_census_data(
         .tolist()
     )
 
-    census_data: pd.DataFrame | None = None
+    overlay_skeleton: pd.DataFrame | None = None
     prediction_data: pd.DataFrame | None = None
     if task_map["population_total"] == 0:
         # Footprint from one time point only; relies on the time-invariant water
@@ -370,9 +370,11 @@ def process_census_data(
             return raster.clip(buffered_parent_geometry).mask(buffered_parent_geometry)
 
         template_raster = load_prediction(model_time_points[0])
-        covered_pixel_ids = np.unique(
-            build_overlay_skeleton(census_data, template_raster)["pixel_id"].to_numpy()
-        )
+        # Build the census/pixel overlay skeleton once and return it, so rake reuses
+        # it instead of recomputing -- the border overlay is the expensive step on
+        # convoluted admins, and it otherwise runs twice (here and in rake).
+        overlay_skeleton = build_overlay_skeleton(census_data, template_raster)
+        covered_pixel_ids = np.unique(overlay_skeleton["pixel_id"].to_numpy())
         pixel_populations = {}
         for model_time_point in model_time_points:
             prediction_raster = (
@@ -387,7 +389,7 @@ def process_census_data(
         prediction_data.index.name = "pixel_id"
         prediction_data = prediction_data.reset_index()
 
-    return census_data, prediction_data, template_raster
+    return overlay_skeleton, prediction_data, template_raster
 
 
 def calculate_time_point_raking_factor(
@@ -602,13 +604,20 @@ def build_overlay_skeleton(
         border_pixels = gpd.GeoDataFrame(
             {"pixel_id": border_idx}, geometry=boxes, crs=crs
         )
-        border = border_pixels.overlay(
-            census[["shape_id", "geometry"]],
-            how="intersection",
-            keep_geom_type=True,
-        )
-        border["isection_area"] = border.area.astype(np.float32)
-        border = border[["pixel_id", "shape_id", "isection_area"]]
+        # Pair border pixels with the shapes they hit (sjoin), then intersect
+        # vectorized and take the area. This avoids geopandas.overlay's noding/
+        # polygonize machinery, which is far slower on convoluted boundaries;
+        # zero-area (line/point) intersections drop out via the area > 0 filter.
+        shapes = census[["shape_id", "geometry"]].reset_index(drop=True)
+        joined = gpd.sjoin(border_pixels, shapes, predicate="intersects", how="inner")
+        shape_geom = shapes.geometry.to_numpy()[joined["index_right"].to_numpy()]
+        isection_area = area(intersection(joined.geometry.to_numpy(), shape_geom))
+        border = pd.DataFrame({
+            "pixel_id": joined["pixel_id"].to_numpy(),
+            "shape_id": joined["shape_id"].to_numpy(),
+            "isection_area": isection_area.astype(np.float32),
+        })
+        border = border[border["isection_area"] > 0]
     else:
         border = pd.DataFrame(
             {"pixel_id": [], "shape_id": [], "isection_area": []}
@@ -639,7 +648,7 @@ def build_overlay(
 
 
 def rake(
-    census_data: gpd.GeoDataFrame,
+    overlay_skeleton: pd.DataFrame,
     prediction_data: pd.DataFrame,
     template_raster: rt.RasterArray,
     census_time_point: str,
@@ -647,13 +656,20 @@ def rake(
 ) -> Iterator[rt.RasterArray]:
     """Yield one raked raster per model time point, in ``model_time_points`` order.
 
+    Takes the overlay skeleton already built by ``process_census_data`` (so the
+    expensive border overlay isn't recomputed) and attaches the per-time-point
+    pixel populations to it here.
+
     A generator (not a list) so the caller can save and free each raster before
     the next is built: peak output memory is a single box-sized raster instead of
     ``n_time_points`` of them. The per-pixel raked values are summed once (over the
     covered pixels only); only the final reshape to the full raster grid is done
     one time point at a time.
     """
-    overlay_gdf = build_overlay(census_data, prediction_data, template_raster)
+    pop_cols = [c for c in prediction_data.columns if c.startswith("pixel_population_")]
+    overlay_gdf = overlay_skeleton.merge(
+        prediction_data[["pixel_id", *pop_cols]], on="pixel_id", how="left"
+    )
     overlay_gdf["pixel_coverage"] = safe_divide(
         overlay_gdf["isection_area"],
         overlay_gdf["pixel_area"],

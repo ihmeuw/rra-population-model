@@ -17,14 +17,6 @@ from rra_population_model.postprocess.census_rake import utils
 # 0 = don't downsample; 1+ = number of downsampled admin-years to run
 DOWNSAMPLE_ADMINS = 0
 
-# resolution: str = "40"
-# version: str = "2026_05_06.001"
-# iso3: str = "CAN"  # "USA"
-# census_time_point: str = "2021q1"  # "2020q1"
-# task_parent_id: str = "2021S051361060141032"  # "02180000200"
-# output_dir: str | Path = pmc.MODEL_ROOT
-# verbose: bool = True
-
 
 def census_rake_main(
     resolution: str,
@@ -60,7 +52,7 @@ def census_rake_main(
             f'    Area: {int(task_map["area"] / 1e6):,} km^2\n'
             f'    Bounding Box Area: {int(task_map["bounds_area"] / 1e6):,} km^2'
         )
-    census_data, prediction_data, template_raster = utils.process_census_data(
+    overlay_skeleton, prediction_data, template_raster = utils.process_census_data(
         resolution,
         version,
         pm_data,
@@ -68,11 +60,11 @@ def census_rake_main(
         model_time_points,
     )
 
-    if prediction_data is not None:
+    if prediction_data is not None and overlay_skeleton is not None:
         if verbose:
             logger.info("Raking")
         raked_rasters = utils.rake(
-            census_data,
+            overlay_skeleton,
             prediction_data,
             template_raster,
             census_time_point,
@@ -139,24 +131,39 @@ def build_workflows(
 ) -> dict[str, dict[str, dict[str, str | int | dict] | pd.Series]]:
     task_admins = task_admins.reset_index("task_parent_level", drop=True)
     common = {"queue": queue, "cores": 1, "project": "proj_rapidresponse"}
+    iso3 = task_admins.index.get_level_values("iso3")
 
-    # Two memory drivers post-fix: (1) the per-country census-cache floor -- USA's
-    # 11.7 GB parquet lands every USA task at ~26 GB regardless of admin size; and
-    # (2) box arrays ~ bounds_area -- the pop=0 maritime/Antarctic singles at
-    # ~20-28 GB (they load the full box even to write a 1x1). Shape count barely
-    # matters now, so population is no longer a bucket axis.
-    is_big = (
-        (task_admins.index.get_level_values("iso3") == "USA")
-        | (task_admins["bounds_area"] > 5e11)
-    )
+    # Post-overlay-speedup, MEMORY is the binding constraint and it scales with
+    # covered pixels ~ area (the raking working set = covered x ~5 cols x n_tps),
+    # independent of population -- a near-empty huge land admin still rakes every
+    # pixel. Runtime is no longer the driver (heavy admins finish in ~10-20 min).
+    #   * xl:  area > 5e10 m^2 (50k km^2) -> up to ~71 GB raking set (max populated
+    #          admin is CAN, 236k km^2). Also catches the one extreme-perimeter
+    #          admin (>4000 km) for runtime headroom.
+    #   * big: USA (11.7 GB census-cache floor -> ~26 GB) or a very large bounding
+    #          box (pop=0 maritime singles).
+    #   * standard: everything else (<= ~16 GB, minutes).
+    is_xl = (task_admins["area"] > 5e10) | (task_admins["perimeter"] > 4e6)
+    is_big = ((iso3 == "USA") | (task_admins["bounds_area"] > 5e11)) & ~is_xl
 
     workflows = {
+        "xl": {
+            "kwargs": {
+                "task_resources": {**common, "memory": "64G", "runtime": "60m"},
+                "max_attempts": 2,
+                "resource_scales": {
+                    "memory":  iter([96     ]),  # G (covers the ~85 GB worst case)
+                    "runtime": iter([90 * 60]),  # seconds
+                },
+            },
+            "task_idx": task_admins.loc[is_xl].index,
+        },
         "big": {
             "kwargs": {
-                "task_resources": {**common, "memory": "36G", "runtime": "45m"},
+                "task_resources": {**common, "memory": "32G", "runtime": "45m"},
                 "max_attempts": 3,
                 "resource_scales": {
-                    "memory":  iter([54     , 72      ]),  # G
+                    "memory":  iter([48     , 64      ]),  # G
                     "runtime": iter([90 * 60, 150 * 60]),  # seconds
                 },
             },
@@ -171,7 +178,7 @@ def build_workflows(
                     "runtime": iter([60 * 60, 120 * 60]),  # seconds
                 },
             },
-            "task_idx": task_admins.loc[~is_big].index,
+            "task_idx": task_admins.loc[~is_xl & ~is_big].index,
         },
     }
     return workflows
@@ -271,7 +278,7 @@ def census_rake(
             workflow["task_idx"]
             .drop(complete_census_tasks, errors="ignore")
         )
-        if DOWNSAMPLE_ADMINS > 0:
+        if 0 < DOWNSAMPLE_ADMINS < len(census_tasks):
             census_tasks = census_tasks.to_frame().sample(DOWNSAMPLE_ADMINS).sort_index().index
         census_tasks = census_tasks.tolist()
 

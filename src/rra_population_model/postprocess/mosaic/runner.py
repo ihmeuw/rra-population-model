@@ -12,6 +12,7 @@ from rra_population_model.postprocess.mosaic import utils
 from rra_population_model.postprocess.utils import check_gdal_installed
 
 STRIDE = 10
+MEASURES = ["population", "building", "change", "poverty"]
 
 
 def mosaic_main(
@@ -29,22 +30,24 @@ def mosaic_main(
 
     pop_paths = []
     denom_paths = []
-    # poverty_paths = []
+    poverty_paths = []
     for x, y in itertools.product(range(STRIDE), range(STRIDE)):
         bx_, by_ = STRIDE * bx + x, STRIDE * by + y
         block_key = f"B-{bx_:>04}X-{by_:>04}Y"
         if block_key not in block_keys:
             continue
         pop_paths.append(pm_data.raked_prediction_path(block_key, time_point, model_spec))
-        if resolution == "40":
+        if "building" in MEASURES:
             denom_paths.append(pm_data.feature_path(resolution, block_key, model_spec.denominator, time_point))
-            # poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
+        if "poverty" in MEASURES:
+            poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
 
     print("loading rasters")
     pop_raster = rt.load_mf_raster(pop_paths)
-    if resolution == "40":
+    if "building" in MEASURES:
         denom_raster = rt.load_mf_raster(denom_paths)
-        # poverty_raster = rt.load_mf_raster(poverty_paths)
+    if "poverty" in MEASURES:
+        poverty_raster = rt.load_mf_raster(poverty_paths)
 
     print("writing cog")
     group_key = f"G-{bx:>04}X-{by:>04}Y"
@@ -57,7 +60,7 @@ def mosaic_main(
         num_cores=num_cores,
         resampling="average",
     )
-    if resolution == "40":
+    if "building" in MEASURES:
         pm_data.save_compiled_prediction(
             raster=denom_raster,
             group_key=group_key,
@@ -67,15 +70,16 @@ def mosaic_main(
             num_cores=num_cores,
             resampling="average",
         )
-        # pm_data.save_compiled_prediction(
-        #     raster=poverty_raster,
-        #     group_key=group_key,
-        #     time_point=time_point,
-        #     model_spec=model_spec,
-        #     measure="poverty",
-        #     num_cores=num_cores,
-        #     resampling="average",
-        # )
+    if "poverty" in MEASURES:
+        pm_data.save_compiled_prediction(
+            raster=poverty_raster,
+            group_key=group_key,
+            time_point=time_point,
+            model_spec=model_spec,
+            measure="poverty",
+            num_cores=num_cores,
+            resampling="average",
+        )
 
 
 @click.command()
@@ -113,11 +117,15 @@ def mosaic(
     num_cores: int,
     queue: str,
 ) -> None:
+    if "population" not in MEASURES:
+        raise ValueError("Must include 'population' in MEASURES")
     check_gdal_installed()
     pm_data = PopulationModelData(output_dir)
 
     raked_time_points = pm_data.list_raked_prediction_time_points(resolution, version)
     time_points = clio.convert_choice(time_point, raked_time_points)
+    if "change" in MEASURES and not all([tp in raked_time_points for tp in time_points]):
+        raise ValueError("Must run all time points if calculating change")
 
     model_frame = pm_data.load_modeling_frame(resolution)
     x_max = max(
@@ -173,7 +181,7 @@ def mosaic(
         log_root=pm_data.log_dir("postprocess_mosaic"),
     )
 
-    if resolution == "40" and all([tp in raked_time_points for tp in time_points]):
+    if "change" in MEASURES:
         print("Calculating and storing change")
         utils.save_change(
             resolution=resolution,
@@ -185,11 +193,7 @@ def mosaic(
 
     print("Building VRTs")
     model_spec = pm_data.load_model_specification(resolution, version)
-    if resolution == "40":
-        measures = ["population", "building", "change"]  # , "poverty"
-    else:
-        measures = ["population"]
-    for measure in measures:
+    for measure in MEASURES:
         measure_time_points = pm_data.list_compiled_prediction_time_points(resolution, version, measure)
         utils.make_vrts(
             measure_time_points,

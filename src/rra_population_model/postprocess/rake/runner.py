@@ -214,7 +214,7 @@ def rake(
         task_resources = {
             "queue": queue,
             "cores": 1,
-            "memory": "5G",
+            "memory": "6G",
             "runtime": "5m",
             "project": "proj_rapidresponse",
         }

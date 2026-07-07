@@ -114,7 +114,6 @@ def generate_census_inputs(
     available_census_years = pm_data.list_census_data()
 
     drop_iso3s = [
-        "SRB",  # Issues with Serbia census
     ]
     keep_years = np.unique([
         int(year.split("q")[0]) for year in pmc.MODELING_TIME_POINTS

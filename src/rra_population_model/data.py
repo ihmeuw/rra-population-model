@@ -869,9 +869,14 @@ class PopulationModelData:
         time_point: str,
         census_time_point: str,
         model_spec: "ModelSpecification",
+        bounds: tuple[float, float, float, float] | None = None,
     ) -> rt.RasterArray:
+        # ``bounds`` reads only that window (padded with nodata outside the file).
+        # A single admin's raster can span a huge, mostly-nodata extent -- tiny on
+        # disk but gigabytes decompressed -- so callers that only need a block-sized
+        # slice pass the block bounds to keep peak memory ~ the window, not the file.
         path = self.raked_census_path(iso3, time_point, census_time_point, model_spec)
-        return rt.load_raster(path / f"{shape_id}.tif")
+        return rt.load_raster(path / f"{shape_id}.tif", bounds=bounds)
 
     def save_census_raking_metadata(
         self,

@@ -82,6 +82,15 @@ def rake_main(
             block_geometry = model_frame.union_all()
 
             task_admins, census_weights = pm_data.load_census_raking_inputs(model_spec)
+            # task_admins stores raw parent geometries -- get_task_admins never repairs
+            # them (only the child census geometries are made valid, at census-rake
+            # time). An invalid geometry makes .intersects raise a GEOSException, so
+            # repair the few invalid ones before the spatial filter.
+            invalid = ~task_admins.geometry.is_valid
+            if invalid.any():
+                task_admins.loc[invalid, "geometry"] = task_admins.loc[
+                    invalid, "geometry"
+                ].make_valid()
             task_admins = task_admins.loc[task_admins.intersects(block_geometry)]
             task_admins = list(
                 task_admins
@@ -89,14 +98,30 @@ def rake_main(
                 .loc[:, ["iso3", "task_parent_id", "census_time_point"]]
                 .itertuples(index=False, name=None)
             )
+            # A census only brackets a subset of model time points, so it only has a
+            # written raster + a weight for those. Restrict to the (iso3,
+            # census_time_point) pairs that contribute to THIS prediction time point:
+            # with one census per country that's all of them; with several it avoids
+            # loading a raster/weight that was never produced for a non-contributing
+            # census (which would otherwise be a missing-file / KeyError crash).
+            weights_here = census_weights.reset_index()
+            contributing = set(
+                weights_here.loc[
+                    weights_here["model_time_point"] == prediction_time_point,
+                    ["iso3", "census_time_point"],
+                ].itertuples(index=False, name=None)
+            )
             census_population = []
             for iso3, shape_id, census_time_point in task_admins:
+                if (iso3, census_time_point) not in contributing:
+                    continue
                 raked_census = pm_data.load_raked_census(
                     iso3,
                     shape_id,
                     prediction_time_point,
                     census_time_point,
                     model_spec,
+                    bounds=block_geometry.bounds,
                 )
                 if np.isnan(raked_census.to_numpy()).all():
                     # Admins with no predicted pixels write a minimal all-nodata

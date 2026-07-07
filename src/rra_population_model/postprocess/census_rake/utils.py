@@ -393,25 +393,31 @@ def process_census_data(
 
 
 def calculate_time_point_raking_factor(
-    overlay_gdf: gpd.GeoDataFrame,
+    shapes: pd.DataFrame,
     sorted_model_time_points: list[str],
     step: int,
     rf_anchor: npt.NDArray[np.floating[Any]],
-) -> tuple[gpd.GeoDataFrame, npt.NDArray[np.floating[Any]]]:
+) -> tuple[pd.DataFrame, npt.NDArray[np.floating[Any]]]:
+    """Set ``raking_factor_<model_time_point>`` on the per-shape ``shapes`` table.
+
+    Pure per-shape math (one row per census shape): the step-limit logic only ever
+    uses shape_population / raking_factor / population_total, which are constant
+    within a shape. The caller applies the resulting factor per pixel.
+    """
     model_time_point = sorted_model_time_points[step]
     prev_model_time_point = sorted_model_time_points[step - 1]
 
     # Find the closest non-zero previous time point as the step-limit reference.
     # A zero shape_population reference collapses raked_pop_prev to zero, which
     # would force raked_pop_t to zero even after predictions recover.
-    shape_population_prev = overlay_gdf[f"shape_population_{prev_model_time_point}"].to_numpy(copy=True)
-    raking_factor_prev = overlay_gdf[f"raking_factor_{prev_model_time_point}"].to_numpy(copy=True)
+    shape_population_prev = shapes[f"shape_population_{prev_model_time_point}"].to_numpy(copy=True)
+    raking_factor_prev = shapes[f"raking_factor_{prev_model_time_point}"].to_numpy(copy=True)
     for earlier_tp in reversed(sorted_model_time_points[:step - 1]):
-        still_zero = (shape_population_prev == 0) & (overlay_gdf[f"shape_population_{model_time_point}"].to_numpy() != 0)
+        still_zero = (shape_population_prev == 0) & (shapes[f"shape_population_{model_time_point}"].to_numpy() != 0)
         if not still_zero.any():
             break
-        shape_population_prev[still_zero] = overlay_gdf.loc[still_zero, f"shape_population_{earlier_tp}"].to_numpy(copy=True)
-        raking_factor_prev[still_zero] = overlay_gdf.loc[still_zero, f"raking_factor_{earlier_tp}"].to_numpy(copy=True)
+        shape_population_prev[still_zero] = shapes.loc[still_zero, f"shape_population_{earlier_tp}"].to_numpy(copy=True)
+        raking_factor_prev[still_zero] = shapes.loc[still_zero, f"raking_factor_{earlier_tp}"].to_numpy(copy=True)
 
     # Step-limit bounds on raking factor:
     # raked_pop_t = shape_pop_t * rf_t must stay in [raked_pop_prev/STEP_LIMIT, raked_pop_prev*STEP_LIMIT]
@@ -421,7 +427,7 @@ def calculate_time_point_raking_factor(
     raked_pop_prev[prev_mask] = shape_population_prev[prev_mask] * raking_factor_prev[prev_mask]
 
     # Only apply bounds when both the reference and the current prediction are valid.
-    shape_pop_current = overlay_gdf[f"shape_population_{model_time_point}"].to_numpy()
+    shape_pop_current = shapes[f"shape_population_{model_time_point}"].to_numpy()
     valid_ref = (shape_pop_current > 0) & np.isfinite(raked_pop_prev)
     rf_lower = np.full_like(raking_factor_prev, 0.0)
     rf_lower[valid_ref] = safe_divide(
@@ -435,7 +441,7 @@ def calculate_time_point_raking_factor(
     )
     # Absolute cap: raked_pop_t <= step * STEP_LIMIT * census_population.
     # Prevents unbounded compounding over many steps.
-    census_pop = overlay_gdf["population_total"].astype(np.float32).to_numpy()
+    census_pop = shapes["population_total"].astype(np.float32).to_numpy()
     rf_upper_abs = np.full_like(raking_factor_prev, np.inf)
     rf_upper_abs[valid_ref] = safe_divide(
         census_pop[valid_ref] * (step * STEP_LIMIT),
@@ -452,37 +458,58 @@ def calculate_time_point_raking_factor(
     valid_direct = shape_pop_current > 0
     raking_factor_direct = np.full_like(raking_factor_prev, np.inf)
     raking_factor_direct[valid_direct] = safe_divide(
-        overlay_gdf["population_total"].astype(np.float32).to_numpy()[valid_direct],
+        shapes["population_total"].astype(np.float32).to_numpy()[valid_direct],
         shape_pop_current[valid_direct],
     )
     valid_anchor = np.isfinite(rf_anchor)
     rf_target = np.where(valid_anchor, rf_anchor, raking_factor_direct)
-    overlay_gdf[f"raking_factor_{model_time_point}"] = np.clip(rf_target, rf_lower, rf_upper)
+    shapes[f"raking_factor_{model_time_point}"] = np.clip(rf_target, rf_lower, rf_upper)
 
     # Replace any remaining inf/nan (shape_pop=0 at this step) with raking_factor_direct,
     # which will itself be inf when shape_pop=0 — those get zeroed out later.
-    invalid_rf = ~np.isfinite(overlay_gdf[f"raking_factor_{model_time_point}"])
-    overlay_gdf.loc[invalid_rf, f"raking_factor_{model_time_point}"] = raking_factor_direct[invalid_rf]
+    invalid_rf = ~np.isfinite(shapes[f"raking_factor_{model_time_point}"])
+    shapes.loc[invalid_rf, f"raking_factor_{model_time_point}"] = raking_factor_direct[invalid_rf]
 
-    # Update anchor: fill in rows where we just computed the first finite raking factor.
-    new_rf = overlay_gdf[f"raking_factor_{model_time_point}"].to_numpy()
+    # Update anchor: fill in shapes where we just computed the first finite raking factor.
+    new_rf = shapes[f"raking_factor_{model_time_point}"].to_numpy()
     rf_anchor = np.where(~np.isfinite(rf_anchor) & np.isfinite(new_rf), new_rf, rf_anchor)
 
-    return overlay_gdf, rf_anchor
+    return shapes, rf_anchor
 
 
-def generate_and_apply_raking_factors(
-    overlay_gdf: gpd.GeoDataFrame,
+def compute_shape_raking_factors(
+    shape_id: npt.NDArray[np.integer[Any]],
+    coverage: npt.NDArray[np.floating[Any]],
+    population_total: npt.NDArray[np.floating[Any]],
+    prediction_data: pd.DataFrame,
+    pred_row: npt.NDArray[np.integer[Any]],
     census_time_point: str,
     model_time_points: list[str],
-) -> gpd.GeoDataFrame:
-    for model_time_point in model_time_points:
-        overlay_gdf[f"covered_pixel_population_{model_time_point}"] = overlay_gdf[f"pixel_population_{model_time_point}"] * overlay_gdf["pixel_coverage"]
-        overlay_gdf[f"shape_population_{model_time_point}"] = overlay_gdf.groupby("shape_id")[f"covered_pixel_population_{model_time_point}"].transform("sum")
+) -> pd.DataFrame:
+    """Per-shape raking factor for each model time point.
 
-    overlay_gdf[f"raking_factor_{census_time_point}"] = safe_divide(
-        overlay_gdf["population_total"].astype(np.float32),
-        overlay_gdf[f"shape_population_{census_time_point}"],
+    Reduces the (covered-pixel) overlay to one row per census shape, runs the
+    step-limit raking there, and returns a table indexed by the integer shape code
+    with a ``raking_factor_<model_time_point>`` column per time point. The caller maps
+    these back onto pixels. This keeps the raking working set at n_shapes x n_tps
+    instead of covered_pixels x (~5 x n_tps).
+
+    ``shape_id``, ``coverage`` and ``population_total`` are per-(covered-pixel-row)
+    arrays; ``pred_row`` maps each of those rows to its row in ``prediction_data`` so
+    the per-time-point pixel populations can be gathered without a merge.
+    """
+    # per-shape census population (constant within a shape) sets the shape order/index
+    shapes = pd.Series(population_total).groupby(shape_id).first().to_frame("population_total")
+    for model_time_point in model_time_points:
+        pixel_population = prediction_data[f"pixel_population_{model_time_point}"].to_numpy()[pred_row]
+        covered = pixel_population * coverage
+        shapes[f"shape_population_{model_time_point}"] = (
+            pd.Series(covered).groupby(shape_id).sum()
+        )
+
+    shapes[f"raking_factor_{census_time_point}"] = safe_divide(
+        shapes["population_total"].astype(np.float32),
+        shapes[f"shape_population_{census_time_point}"],
     )
 
     distances = [
@@ -493,31 +520,24 @@ def generate_and_apply_raking_factors(
     ]
     pre_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points)) if i[0] >= 0]
     post_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points), reverse=True) if i[0] <= 0]
-    # rf_anchor: per-row target raking factor, initialized from the census time point
-    # and updated to the first finite value encountered as we step away from it.
-    rf_anchor_init = overlay_gdf[f"raking_factor_{census_time_point}"].to_numpy().copy()
+    # rf_anchor: per-shape target raking factor, initialized from the census time
+    # point and updated to the first finite value encountered as we step away from it.
+    rf_anchor_init = shapes[f"raking_factor_{census_time_point}"].to_numpy().copy()
     for sorted_model_time_points in [pre_sorted_model_time_points, post_sorted_model_time_points]:
         rf_anchor = rf_anchor_init.copy()
         for i in range(1, len(sorted_model_time_points)):
-            overlay_gdf, rf_anchor = calculate_time_point_raking_factor(
-                overlay_gdf,
+            shapes, rf_anchor = calculate_time_point_raking_factor(
+                shapes,
                 sorted_model_time_points,
                 i,
                 rf_anchor,
             )
 
-    for model_time_point in model_time_points:
-        overlay_gdf.loc[
-            ~np.isfinite(overlay_gdf[f"raking_factor_{model_time_point}"]),
-            f"raking_factor_{model_time_point}"
-        ] = 0
-        overlay_gdf[f"raked_pixel_population_{model_time_point}"] = overlay_gdf[f"covered_pixel_population_{model_time_point}"] * overlay_gdf[f"raking_factor_{model_time_point}"]
+    raking_factor_cols = [f"raking_factor_{model_time_point}" for model_time_point in model_time_points]
+    for col in raking_factor_cols:
+        shapes.loc[~np.isfinite(shapes[col]), col] = 0
 
-    spatial_cols = ["shape_id", "pixel_id", "isection_area", "pixel_area", "pixel_coverage"]
-    raked_pixel_cols = [f"raked_pixel_population_{model_time_point}" for model_time_point in model_time_points]
-    overlay_gdf = overlay_gdf.loc[:, spatial_cols + raked_pixel_cols]
-
-    return overlay_gdf
+    return shapes[raking_factor_cols]
 
 
 def build_overlay_skeleton(
@@ -551,7 +571,7 @@ def build_overlay_skeleton(
     )
 
     census = census_data.reset_index(drop=True)
-    shape_ids = census["shape_id"].to_numpy()
+    population_total = census["population_total"].to_numpy()
     n_shapes = len(census)
     id_dtype = "uint16" if n_shapes < np.iinfo(np.uint16).max else "uint32"
 
@@ -578,10 +598,15 @@ def build_overlay_skeleton(
     border_mask &= valid
 
     # Interior pixels: full coverage, exactly one shape each, no geometry needed.
+    # ``shape_id`` here is the 0-based row position into ``census`` (an integer *code*,
+    # not the string admin id). The string id is never needed downstream -- pixels are
+    # only grouped by shape and census totals looked up by shape -- and integer codes
+    # make the per-shape groupby and the per-time-point factor map far cheaper than
+    # hashing a string on every one of the (up to ~150M) rows.
     interior_idx = np.flatnonzero((assigned > 0) & ~border_mask)
     interior = pd.DataFrame({
         "pixel_id": interior_idx,
-        "shape_id": shape_ids[assigned.ravel()[interior_idx] - 1],
+        "shape_id": (assigned.ravel()[interior_idx] - 1).astype(id_dtype),
         "isection_area": pixel_area,
     })
 
@@ -612,20 +637,25 @@ def build_overlay_skeleton(
         joined = gpd.sjoin(border_pixels, shapes, predicate="intersects", how="inner")
         shape_geom = shapes.geometry.to_numpy()[joined["index_right"].to_numpy()]
         isection_area = area(intersection(joined.geometry.to_numpy(), shape_geom))
+        # index_right is the positional index into ``shapes`` (== census row), i.e. the
+        # same integer shape code the interior pixels carry.
         border = pd.DataFrame({
             "pixel_id": joined["pixel_id"].to_numpy(),
-            "shape_id": joined["shape_id"].to_numpy(),
+            "shape_id": joined["index_right"].to_numpy().astype(id_dtype),
             "isection_area": isection_area.astype(np.float32),
         })
         border = border[border["isection_area"] > 0]
     else:
-        border = pd.DataFrame(
-            {"pixel_id": [], "shape_id": [], "isection_area": []}
-        )
+        border = pd.DataFrame({
+            "pixel_id": np.array([], dtype=np.int64),
+            "shape_id": np.array([], dtype=id_dtype),
+            "isection_area": np.array([], dtype=np.float32),
+        })
 
     overlay = pd.concat([interior, border], ignore_index=True)
     overlay["pixel_area"] = pixel_area
-    overlay = overlay.merge(census[["shape_id", "population_total"]], on="shape_id", how="left")
+    # Census total per shape by integer-indexing the code (was a string merge on shape_id).
+    overlay["population_total"] = population_total[overlay["shape_id"].to_numpy()]
 
     return overlay
 
@@ -666,36 +696,56 @@ def rake(
     covered pixels only); only the final reshape to the full raster grid is done
     one time point at a time.
     """
-    pop_cols = [c for c in prediction_data.columns if c.startswith("pixel_population_")]
-    overlay_gdf = overlay_skeleton.merge(
-        prediction_data[["pixel_id", *pop_cols]], on="pixel_id", how="left"
-    )
-    overlay_gdf["pixel_coverage"] = safe_divide(
-        overlay_gdf["isection_area"],
-        overlay_gdf["pixel_area"],
+    shape_id = overlay_skeleton["shape_id"].to_numpy()
+    population_total = overlay_skeleton["population_total"].to_numpy()
+    coverage = safe_divide(
+        overlay_skeleton["isection_area"].to_numpy(),
+        overlay_skeleton["pixel_area"].to_numpy(),
     ).clip(0, 1)
 
-    overlay_gdf = generate_and_apply_raking_factors(
-        overlay_gdf, census_time_point, model_time_points
+    # Align each skeleton row to its prediction row without a merge. prediction_data
+    # is keyed by covered pixel_id and built from np.unique(...), so its pixel_id
+    # column is sorted and contains every skeleton pixel_id; searchsorted gives the
+    # exact prediction row for each skeleton row -- the same values a left merge on
+    # pixel_id would -- without ever materializing the n_tps population columns onto
+    # the (up to ~150M-row) overlay. That duplicate of the prediction table plus the
+    # join transient was the dominant rake memory cost.
+    skel_pixel = overlay_skeleton["pixel_id"].to_numpy()
+    pred_pixel = prediction_data["pixel_id"].to_numpy()
+    pred_row = np.searchsorted(pred_pixel, skel_pixel)
+
+    # Raking factors are computed on a small per-shape table; the per-pixel apply
+    # (covered_population * raking_factor -> sum per pixel) is done one time point at
+    # a time below so no covered_pixels x n_tps intermediate is ever materialized.
+    shape_raking_factors = compute_shape_raking_factors(
+        shape_id, coverage, population_total, prediction_data, pred_row,
+        census_time_point, model_time_points,
     )
 
-    raked_by_pixel = (
-        overlay_gdf
-        .loc[:, ["pixel_id"] + [f"raked_pixel_population_{model_time_point}" for model_time_point in model_time_points]]
-        .groupby("pixel_id")
-        .sum()
-    )
-    idx = np.arange(template_raster.size)
+    shape_id_series = pd.Series(shape_id)
+    # Factorize pixel_id once (values are flattened raster positions). Per time
+    # point we then sum-per-pixel with np.bincount and scatter into the box grid --
+    # avoiding a groupby (re-hash) and a full-box reindex on every time point, which
+    # is what made large admins slow.
+    codes, covered_positions = pd.factorize(skel_pixel, sort=True)
+    n_covered = len(covered_positions)
+    size = template_raster.size
     for model_time_point in model_time_points:
-        raked_population = (
-            raked_by_pixel[f"raked_pixel_population_{model_time_point}"]
-            .reindex(idx, fill_value=np.nan)
-            .to_numpy()
-            .astype(np.float32)
-            .reshape(template_raster.shape)
+        raking_factor = shape_id_series.map(
+            shape_raking_factors[f"raking_factor_{model_time_point}"]
+        ).to_numpy()
+        pixel_population = prediction_data[f"pixel_population_{model_time_point}"].to_numpy()[pred_row]
+        raked_pixel_population = pixel_population * coverage * raking_factor
+        per_pixel = np.bincount(
+            codes,
+            weights=np.nan_to_num(raked_pixel_population),
+            minlength=n_covered,
         )
+        raked_population = np.full(size, np.nan, dtype=np.float32)
+        raked_population[covered_positions] = per_pixel
+        raked_data = raked_population.reshape(template_raster.shape)
         raked_raster = rt.RasterArray(
-            data=raked_population,
+            data=raked_data,
             transform=template_raster.transform,
             crs=template_raster.crs,
             no_data_value=np.nan,

@@ -112,12 +112,15 @@ def check_time_points(census_weights: pd.DataFrame) -> None:
 
 def check_complete(
     census_task: tuple[str, str, str],
-    model_time_point: str,
     pm_data: PopulationModelData,
     model_spec: ModelSpecification,
 ):
     iso3, census_time_point, task_parent_id = census_task
-    path = pm_data.raked_census_path(iso3, model_time_point, census_time_point, model_spec) / f"{task_parent_id}.tif"
+    # A completed task always writes a raster at model_time_point == census_time_point
+    # (weight 1 there). Use that as the marker: with multiple censuses per country a
+    # census contributes to only a subset of model time points, so a fixed global last
+    # time point would be missing for early censuses and they'd rerun forever.
+    path = pm_data.raked_census_path(iso3, census_time_point, census_time_point, model_spec) / f"{task_parent_id}.tif"
     if not path.exists():
         return ()
     elif path.stat().st_size < 1:
@@ -134,12 +137,13 @@ def build_workflows(
     iso3 = task_admins.index.get_level_values("iso3")
 
     # Post-overlay-speedup, MEMORY is the binding constraint and it scales with
-    # covered pixels ~ area (the raking working set = covered x ~5 cols x n_tps),
-    # independent of population -- a near-empty huge land admin still rakes every
-    # pixel. Runtime is no longer the driver (heavy admins finish in ~10-20 min).
-    #   * xl:  area > 5e10 m^2 (50k km^2) -> up to ~71 GB raking set (max populated
-    #          admin is CAN, 236k km^2). Also catches the one extreme-perimeter
-    #          admin (>4000 km) for runtime headroom.
+    # covered pixels ~ area (process_census_data builds a covered_pixels x n_tps
+    # prediction table), independent of population -- a near-empty huge land admin
+    # still processes every pixel. Runtime is no longer the driver (heavy admins
+    # finish in ~10-15 min after the integer-reindex + merge-free rake).
+    #   * xl:  area > 5e10 m^2 (50k km^2) -> ~52 GB peak for the worst case (CAN,
+    #          236k km^2, measured), so the 64 G first attempt succeeds. Also catches
+    #          the one extreme-perimeter admin (>4000 km) for runtime headroom.
     #   * big: USA (11.7 GB census-cache floor -> ~26 GB) or a very large bounding
     #          box (pop=0 maritime singles).
     #   * standard: everything else (<= ~16 GB, minutes).
@@ -152,7 +156,7 @@ def build_workflows(
                 "task_resources": {**common, "memory": "64G", "runtime": "60m"},
                 "max_attempts": 2,
                 "resource_scales": {
-                    "memory":  iter([96     ]),  # G (covers the ~85 GB worst case)
+                    "memory":  iter([96     ]),  # G retry insurance (peak ~52 G, so 64 G should hold)
                     "runtime": iter([90 * 60]),  # seconds
                 },
             },
@@ -260,7 +264,6 @@ def census_rake(
 
     _check_complete = functools.partial(
         check_complete,
-        model_time_point=time_points[-1],
         pm_data=pm_data,
         model_spec=model_spec,
     )
@@ -301,5 +304,5 @@ def census_rake(
                 max_attempts=workflow["kwargs"]["max_attempts"],
                 resource_scales=workflow["kwargs"]["resource_scales"],
                 log_root=pm_data.log_dir("postprocess_census_rake"),
-                concurrency_limit=2_500,
+                concurrency_limit=1_000,
             )

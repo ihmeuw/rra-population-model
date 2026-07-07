@@ -1,5 +1,4 @@
 import itertools
-import tqdm
 
 import click
 import rasterra as rt

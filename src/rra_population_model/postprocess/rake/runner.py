@@ -211,19 +211,28 @@ def rake(
     block_keys = model_frame.block_key.unique().tolist()
 
     if resolution == "40":
-        task_resources = {
-            "queue": queue,
-            "cores": 1,
-            "memory": "6G",
-            "runtime": "5m",
-            "project": "proj_rapidresponse",
-        }
+        if input_data == "raw":
+            task_resources = {
+                "queue": queue,
+                "cores": 1,
+                "memory": "9G",
+                "runtime": "9m",
+                "project": "proj_rapidresponse",
+            }
+        else:
+            task_resources = {
+                "queue": queue,
+                "cores": 1,
+                "memory": "6G",
+                "runtime": "6m",
+                "project": "proj_rapidresponse",
+            }
     elif resolution == "100":
         task_resources = {
             "queue": queue,
             "cores": 1,
-            "memory": "4G",
-            "runtime": "3m",
+            "memory": "6G",
+            "runtime": "6m",
             "project": "proj_rapidresponse",
         }
 

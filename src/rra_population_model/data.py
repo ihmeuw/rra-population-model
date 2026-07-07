@@ -872,12 +872,31 @@ class PopulationModelData:
         model_spec: "ModelSpecification",
         bounds: tuple[float, float, float, float] | None = None,
     ) -> rt.RasterArray:
-        # ``bounds`` reads only that window (padded with nodata outside the file).
         # A single admin's raster can span a huge, mostly-nodata extent -- tiny on
-        # disk but gigabytes decompressed -- so callers that only need a block-sized
-        # slice pass the block bounds to keep peak memory ~ the window, not the file.
-        path = self.raked_census_path(iso3, time_point, census_time_point, model_spec)
-        return rt.load_raster(path / f"{shape_id}.tif", bounds=bounds)
+        # disk but gigabytes decompressed. Callers that only need a block-sized slice
+        # pass ``bounds`` to cap the read. We first intersect ``bounds`` with the
+        # raster's OWN extent (a cheap header read) so the read is minimal in both
+        # directions: a giant admin is capped at the block slice, and a small admin
+        # reads just its own extent instead of being padded up to the full window
+        # (rt.load_raster reads boundless, which would otherwise inflate every small
+        # admin to block size and blow up dense blocks).
+        path = self.raked_census_path(iso3, time_point, census_time_point, model_spec) / f"{shape_id}.tif"
+        if bounds is not None:
+            with rasterio.open(path) as f:
+                fb = f.bounds
+            overlap = (
+                max(bounds[0], fb.left),
+                max(bounds[1], fb.bottom),
+                min(bounds[2], fb.right),
+                min(bounds[3], fb.top),
+            )
+            if overlap[0] < overlap[2] and overlap[1] < overlap[3]:
+                bounds = overlap
+            # else: no overlap with the raster's data extent (rare -- only a nodata
+            # sliver of the admin reaches the block). Fall through with the original
+            # bounds; the boundless read is all-nodata over the block, which the
+            # caller drops. Rare enough not to bother avoiding the padded read.
+        return rt.load_raster(path, bounds=bounds)
 
     def save_census_raking_metadata(
         self,

@@ -104,6 +104,7 @@ def rake_main(
                     # inflate the merge extent). A *missing* tif raises above,
                     # surfacing a failed job instead of silently dropping it.
                     continue
+                raked_census = raked_census.clip(block_geometry).mask(block_geometry)
                 census_population.append(
                     raked_census
                     *
@@ -111,7 +112,6 @@ def rake_main(
                 )
             if census_population:
                 census_population = rt.merge(census_population, method="sum")
-                census_population = census_population.clip(block_geometry).mask(block_geometry)
                 raked = rt.merge([census_population, raked], method="first")
 
         elif input_data not in ["raked", "raw_skip"]:

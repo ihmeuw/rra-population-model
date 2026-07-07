@@ -136,53 +136,70 @@ def build_workflows(
     common = {"queue": queue, "cores": 1, "project": "proj_rapidresponse"}
     iso3 = task_admins.index.get_level_values("iso3")
 
-    # Post-overlay-speedup, MEMORY is the binding constraint and it scales with
-    # covered pixels ~ area (process_census_data builds a covered_pixels x n_tps
-    # prediction table), independent of population -- a near-empty huge land admin
-    # still processes every pixel. Runtime is no longer the driver (heavy admins
-    # finish in ~10-15 min after the integer-reindex + merge-free rake).
-    #   * xl:  area > 5e10 m^2 (50k km^2) -> ~52 GB peak for the worst case (CAN,
-    #          236k km^2, measured), so the 64 G first attempt succeeds. Also catches
-    #          the one extreme-perimeter admin (>4000 km) for runtime headroom.
-    #   * big: USA (11.7 GB census-cache floor -> ~26 GB) or a very large bounding
-    #          box (pop=0 maritime singles).
-    #   * standard: everything else (<= ~16 GB, minutes).
-    is_xl = (task_admins["area"] > 5e10) | (task_admins["perimeter"] > 4e6)
-    is_big = ((iso3 == "USA") | (task_admins["bounds_area"] > 5e11)) & ~is_xl
+    # Tiers + resources are sized from the full-run job metadata (jobmon max RSS,
+    # which includes the census-file page cache -- the number SLURM must satisfy).
+    # MEMORY scales with covered (land) pixels ~ area, plus a per-country census-cache
+    # floor (USA's 11.7 GB parquet). RUNTIME also scales with area, except a couple of
+    # extreme-perimeter admins (convoluted CAN lakes) that are runtime-bound but light.
+    # First attempts are set just above each tier's observed max; retries absorb the
+    # tail. Observed per-tier max RSS / runtime (n done):
+    #   * standard: area <= 5e4 m^2*1e6, non-USA (11,440) -> <= 12.7 GB / 18.9 min
+    #   * big:      USA (census floor) or 5e4-1e5 km^2 (5,542) -> <= 29.1 GB / 14.9 min
+    #   * xl:       area > 1e5 km^2 or perimeter > 4000 km (99) -> <= 81.5 GB / 56 min
+    #               (only SAU.7_1 exceeds 64 GB -> the one memory retry to 96)
+    #   * xxl:      area > 4e5 km^2 AND populated -> ~115 GB. Memory tracks covered
+    #               *land*: a populated desert (SAU.8_1, 522k km^2 / 5.1M pop) is fully
+    #               covered -> ~115 GB, but the empty arctic CAN giants (same size,
+    #               population 0, water-masked) only hit ~52 GB and stay in xl. NOTE: a
+    #               future *empty* huge desert would slip to xl and lean on its retry.
+    is_xxl = (task_admins["area"] > 4e11) & (task_admins["population_total"] > 0)
+    is_xl = ((task_admins["area"] > 1e11) | (task_admins["perimeter"] > 4e6)) & ~is_xxl
+    is_big = ((iso3 == "USA") | (task_admins["area"] > 5e10)) & ~is_xl & ~is_xxl
 
     workflows = {
-        "xl": {
+        "xxl": {
             "kwargs": {
-                "task_resources": {**common, "memory": "64G", "runtime": "60m"},
+                "task_resources": {**common, "memory": "128G", "runtime": "90m"},
                 "max_attempts": 2,
                 "resource_scales": {
-                    "memory":  iter([96     ]),  # G retry insurance (peak ~52 G, so 64 G should hold)
-                    "runtime": iter([90 * 60]),  # seconds
+                    "memory":  iter([192     ]),  # G (est peak ~115 G; headroom for huge box transients)
+                    "runtime": iter([150 * 60]),  # seconds
+                },
+            },
+            "task_idx": task_admins.loc[is_xxl].index,
+        },
+        "xl": {
+            "kwargs": {
+                "task_resources": {**common, "memory": "64G", "runtime": "45m"},
+                "max_attempts": 2,
+                "resource_scales": {
+                    "memory":  iter([96     ]),  # G (only SAU.7_1 at ~82 GB needs it)
+                    "runtime": iter([90 * 60]),  # seconds (SAU.7_1 took 56 min at 96 G)
                 },
             },
             "task_idx": task_admins.loc[is_xl].index,
         },
         "big": {
             "kwargs": {
-                "task_resources": {**common, "memory": "32G", "runtime": "45m"},
+                "task_resources": {**common, "memory": "32G", "runtime": "22m"},
                 "max_attempts": 3,
                 "resource_scales": {
                     "memory":  iter([48     , 64      ]),  # G
-                    "runtime": iter([90 * 60, 150 * 60]),  # seconds
+                    "runtime": iter([45 * 60, 90 * 60]),  # seconds
                 },
             },
             "task_idx": task_admins.loc[is_big].index,
         },
         "standard": {
             "kwargs": {
-                "task_resources": {**common, "memory": "18G", "runtime": "30m"},
+                "task_resources": {**common, "memory": "16G", "runtime": "25m"},
                 "max_attempts": 3,
                 "resource_scales": {
                     "memory":  iter([30     , 45      ]),  # G
-                    "runtime": iter([60 * 60, 120 * 60]),  # seconds
+                    "runtime": iter([50 * 60, 90 * 60]),  # seconds
                 },
             },
-            "task_idx": task_admins.loc[~is_xl & ~is_big].index,
+            "task_idx": task_admins.loc[~is_xxl & ~is_xl & ~is_big].index,
         },
     }
     return workflows
@@ -236,7 +253,7 @@ def census_rake(
 
     task_admins, census_weights = utils.generate_census_inputs(
         pm_data,
-        start_level=2,
+        start_level=1,
         # Coarser than the old (1e10, 20_000): post-fix, per-task memory is driven
         # by the per-country census-cache floor + box arrays (~bounds_area), not
         # shape count -- so we consolidate into fewer, bigger, longer jobs and pay

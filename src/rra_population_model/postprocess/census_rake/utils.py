@@ -113,15 +113,16 @@ def generate_census_inputs(
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
     available_census_years = pm_data.list_census_data()
 
-    keep_iso3s = [
-        "ARG", "AUS", "BGD", "BRA", "CAN", "CZE", "DOM", "ECU", "ESP",
-        "GRC", "ISL", "JAM", "KIR", "LBR", "MDV", "MEX", "MLT", "MYS",
-        "NPL", "PAN", "POL", "PRT", "QAT", "ROU", "RWA", "SVK", "TJK",
-        "TLS", "TON", "TZA", "VUT", "USA", "UGA", "ZAF",
+    drop_iso3s = [
+        "SRB",  # Issues with Serbia census
     ]
+    keep_years = np.unique([
+        int(year.split("q")[0]) for year in pmc.MODELING_TIME_POINTS
+    ]).tolist()
     data_years = [
         i for i in available_census_years
-        if i[0] in keep_iso3s
+        if int(i[1]) in keep_years
+        and i[0] not in drop_iso3s
     ]
 
     task_admins = []

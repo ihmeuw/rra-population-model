@@ -210,9 +210,6 @@ def rake(
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()
 
-    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
-    # time_points = ["2020q1", "2020q2"]
-
     if resolution == "40":
         task_resources = {
             "queue": queue,

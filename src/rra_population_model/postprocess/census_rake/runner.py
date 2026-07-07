@@ -159,7 +159,7 @@ def build_workflows(
     workflows = {
         "xxl": {
             "kwargs": {
-                "task_resources": {**common, "memory": "128G", "runtime": "90m"},
+                "task_resources": {**common, "memory": "148G", "runtime": "120m"},
                 "max_attempts": 2,
                 "resource_scales": {
                     "memory":  iter([192     ]),  # G (est peak ~115 G; headroom for huge box transients)

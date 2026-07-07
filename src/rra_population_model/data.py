@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import rasterio
 import rasterra as rt
 import shapely
 import yaml

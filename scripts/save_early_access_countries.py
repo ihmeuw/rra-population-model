@@ -7,6 +7,7 @@ import tqdm
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import shapely
 import rasterra as rt
 from affine import Affine
 
@@ -21,11 +22,6 @@ from rra_population_model.data import (
     save_raster,
 )
 from rra_population_model.constants import CRSES
-
-COG_LOCATION_IDS = [
-    ## countries that are flagged by the near-antimeridian logic but create problems
-    # 413,  # Tokelau
-]
 
 
 def workflow(
@@ -167,7 +163,7 @@ def worker(
     location_id_time_point: str,
     resolution: str,
     version: str,
-    buffer_size: int = 5000,
+    buffer_size: int = 1000,
 ):
     location_id, time_point = location_id_time_point.split('-')
     location_id = int(location_id)
@@ -188,7 +184,7 @@ def worker(
     shapes = gpd.read_parquet(
         "/mnt/team/rapidresponse/pub/population-model/admin-inputs/raking/gbd-inputs/shapes_lsae_1285_a0.parquet"
     )
-    geometry = shapes.to_crs("ESRI:54034").set_index('location_id').loc[location_id, 'geometry']
+    geometry = shapes.set_index('location_id').loc[[location_id]].to_crs("ESRI:54034").loc[location_id, 'geometry']
     buffered_geometry = (
         gpd.GeoSeries(geometry)
         .explode(index_parts=True)
@@ -196,28 +192,42 @@ def worker(
         .union_all()
     )
 
-    if location_id in COG_LOCATION_IDS:
-        near_antimeridian = False
-    else:
-        block_key_x_max = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:])).max()
-        modeling_frame = modeling_frame.loc[modeling_frame.intersects(buffered_geometry)]
-        block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
-        boundary_blocks = 8
-        near_antimeridian = (
-            (block_key_x <= boundary_blocks)
-            | (block_key_x >= block_key_x_max - boundary_blocks)
-        ).any()
+    block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
+    block_key_x_max = block_key_x.max()
+    intersects_buffer = modeling_frame.intersects(buffered_geometry)
+    modeling_frame = modeling_frame.loc[intersects_buffer]
+    block_key_x = block_key_x.loc[intersects_buffer]
+    boundary_blocks = 8
+    near_antimeridian = (
+        (block_key_x <= boundary_blocks)
+        | (block_key_x >= block_key_x_max - boundary_blocks)
+    ).any()
 
     if near_antimeridian:
         logger.info('LOADING RAKED PREDICTION BLOCKS AND REPROJECTING DUE TO ANTIMERIDIAN PROXIMITY')
-        block_keys = modeling_frame["block_key"].unique().tolist()
+        block_groups = modeling_frame.groupby("block_key")
 
         raster = []
-        for block_key in tqdm.tqdm(block_keys, total=len(block_keys)):
-            block_raster = pm_data.load_raked_prediction(
-                block_key, time_point, model_spec
+        pixel_size = float(resolution)
+        for block_key, block_frame in tqdm.tqdm(block_groups, total=len(block_groups)):
+            block_x_min, block_y_min, _, _ = block_frame.total_bounds
+            overlap = geometry.intersection(shapely.box(*block_frame.total_bounds))
+            if overlap.is_empty or overlap.area == 0:
+                continue
+            # snap subset bounds outward to the block's pixel grid so the
+            # windowed read stays aligned with the model grid
+            o_x_min, o_y_min, o_x_max, o_y_max = overlap.bounds
+            subset_bounds = shapely.box(
+                block_x_min + np.floor((o_x_min - block_x_min) / pixel_size) * pixel_size,
+                block_y_min + np.floor((o_y_min - block_y_min) / pixel_size) * pixel_size,
+                block_x_min + np.ceil((o_x_max - block_x_min) / pixel_size) * pixel_size,
+                block_y_min + np.ceil((o_y_max - block_y_min) / pixel_size) * pixel_size,
             )
-            block_raster = block_raster.clip(geometry).mask(geometry)
+            block_raster = pm_data.load_raked_prediction(
+                block_key, time_point, model_spec,
+                subset_bounds=subset_bounds,
+            )
+            block_raster = block_raster.clip(overlap).mask(overlap)
             block_raster = shift_to_antimeridian(block_raster)
             raster.append(block_raster)
         raster = rt.merge(raster)
@@ -227,6 +237,16 @@ def worker(
             pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
             buffered_geometry.bounds,
         ).clip(geometry).mask(geometry)
+
+    logger.info('SETTING ZEROS TO NO DATA')
+    data = raster.to_numpy()
+    data[data == 0] = raster.no_data_value
+    raster = rt.RasterArray(
+        data,
+        transform=raster.transform,
+        crs=raster.crs,
+        no_data_value=raster.no_data_value,
+    )
 
     logger.info('SAVING COUNTRY RASTER')
     output_path = output_root / ihme_loc_id / f'{ihme_loc_id}_{time_point}.tif'

@@ -1185,6 +1185,30 @@ class PopulationModelData:
     def figure_results(self) -> Path:
         return Path(self.root / "figure_results")
 
+    def country_data_root(self, resolution: str, version: str) -> Path:
+        return self.root / "country_data" / f"{resolution}m" / version
+
+    def country_data_path(
+        self, resolution: str, version: str, ihme_loc_id: str, time_point: str
+    ) -> Path:
+        return (
+            self.country_data_root(resolution, version)
+            / ihme_loc_id
+            / f"{ihme_loc_id}_{time_point}.tif"
+        )
+
+    def save_country_data(
+        self,
+        raster: rt.RasterArray,
+        resolution: str,
+        version: str,
+        ihme_loc_id: str,
+        time_point: str,
+    ) -> None:
+        path = self.country_data_path(resolution, version, ihme_loc_id, time_point)
+        mkdir(path.parent, exist_ok=True, parents=True)
+        save_raster(raster, path)
+
     @property
     def itu(self) -> Path:
         return Path(self.root, "itu")

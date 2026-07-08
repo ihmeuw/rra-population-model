@@ -11,7 +11,7 @@ from rra_population_model.postprocess.mosaic import utils
 from rra_population_model.postprocess.utils import check_gdal_installed
 
 STRIDE = 10
-MEASURES = ["population", "building", "change", "poverty"]
+MEASURES = ["population", "building", "change"]  # , "poverty"
 
 
 def mosaic_main(
@@ -116,8 +116,6 @@ def mosaic(
     num_cores: int,
     queue: str,
 ) -> None:
-    if "population" not in MEASURES:
-        raise ValueError("Must include 'population' in MEASURES")
     check_gdal_installed()
     pm_data = PopulationModelData(output_dir)
 
@@ -126,59 +124,60 @@ def mosaic(
     if "change" in MEASURES and not all([tp in raked_time_points for tp in time_points]):
         raise ValueError("Must run all time points if calculating change")
 
-    model_frame = pm_data.load_modeling_frame(resolution)
-    x_max = max(
-        [
-            int(bk.split("-")[1].split("X")[0])
-            for bk in model_frame["block_key"].unique()
-        ]
-    )
-    y_max = max(
-        [
-            int(bk.split("-")[2].split("Y")[0])
-            for bk in model_frame["block_key"].unique()
-        ]
-    )
+    if "population" in MEASURES:
+        model_frame = pm_data.load_modeling_frame(resolution)
+        x_max = max(
+            [
+                int(bk.split("-")[1].split("X")[0])
+                for bk in model_frame["block_key"].unique()
+            ]
+        )
+        y_max = max(
+            [
+                int(bk.split("-")[2].split("Y")[0])
+                for bk in model_frame["block_key"].unique()
+            ]
+        )
 
-    bxs = list(range(x_max // STRIDE + int(bool(x_max % STRIDE))))
-    bys = list(range(y_max // STRIDE + int(bool(y_max % STRIDE))))
+        bxs = list(range(x_max // STRIDE + int(bool(x_max % STRIDE))))
+        bys = list(range(y_max // STRIDE + int(bool(y_max % STRIDE))))
 
-    if resolution == "40":
-        task_resources = {
-            "queue": queue,
-            "cores": num_cores,
-            "memory": "160G",
-            "runtime": "20m",
-            "project": "proj_rapidresponse",
-        }
-    elif resolution == "100":
-        task_resources = {
-            "queue": queue,
-            "cores": num_cores,
-            "memory": "120G",
-            "runtime": "10m",
-            "project": "proj_rapidresponse",
-        }
+        if resolution == "40":
+            task_resources = {
+                "queue": queue,
+                "cores": num_cores,
+                "memory": "160G",
+                "runtime": "20m",
+                "project": "proj_rapidresponse",
+            }
+        elif resolution == "100":
+            task_resources = {
+                "queue": queue,
+                "cores": num_cores,
+                "memory": "120G",
+                "runtime": "10m",
+                "project": "proj_rapidresponse",
+            }
 
-    print("Compiling")
-    jobmon.run_parallel(
-        runner="pmtask postprocess",
-        task_name="mosaic",
-        task_resources=task_resources,
-        node_args={
-            "bx": bxs,
-            "by": bys,
-            "time-point": time_points,
-        },
-        task_args={
-            "resolution": resolution,
-            "version": version,
-            "num-cores": num_cores,
-            "output-dir": output_dir,
-        },
-        max_attempts=2,
-        log_root=pm_data.log_dir("postprocess_mosaic"),
-    )
+        print("Compiling")
+        jobmon.run_parallel(
+            runner="pmtask postprocess",
+            task_name="mosaic",
+            task_resources=task_resources,
+            node_args={
+                "bx": bxs,
+                "by": bys,
+                "time-point": time_points,
+            },
+            task_args={
+                "resolution": resolution,
+                "version": version,
+                "num-cores": num_cores,
+                "output-dir": output_dir,
+            },
+            max_attempts=2,
+            log_root=pm_data.log_dir("postprocess_mosaic"),
+        )
 
     if "change" in MEASURES:
         print("Calculating and storing change")

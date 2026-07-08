@@ -120,7 +120,7 @@ def runner(resolution: str, version: str):
     for location_id, ihme_loc_id in zip(location_ids, ihme_loc_ids):
         for time_point in time_points:
             possible += 1
-            output_path = output_root / ihme_loc_id / f'{time_point}.tif'
+            output_path = output_root / ihme_loc_id / f'{ihme_loc_id}_{time_point}.tif'
             if not output_path.exists():
                 location_id_time_points.append(f'{location_id}-{time_point}')
                 running += 1
@@ -229,7 +229,7 @@ def worker(
         ).clip(geometry).mask(geometry)
 
     logger.info('SAVING COUNTRY RASTER')
-    output_path = output_root / ihme_loc_id / f'{time_point}.tif'
+    output_path = output_root / ihme_loc_id / f'{ihme_loc_id}_{time_point}.tif'
     save_raster(raster, output_path)
 
 

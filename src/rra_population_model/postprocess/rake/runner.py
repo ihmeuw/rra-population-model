@@ -223,8 +223,8 @@ def rake(
             task_resources = {
                 "queue": queue,
                 "cores": 1,
-                "memory": "6G",
-                "runtime": "6m",
+                "memory": "4G",
+                "runtime": "4m",
                 "project": "proj_rapidresponse",
             }
     elif resolution == "100":

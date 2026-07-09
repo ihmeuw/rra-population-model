@@ -5,6 +5,7 @@ import functools
 import click
 from rra_tools import jobmon, parallel
 
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 
@@ -129,80 +130,87 @@ def check_complete(
         return iso3, census_time_point, task_parent_id
 
 
-def build_workflows(
-    task_admins: gpd.GeoDataFrame, queue: str
-) -> dict[str, dict[str, dict[str, str | int | dict] | pd.Series]]:
-    task_admins = task_admins.reset_index("task_parent_level", drop=True)
-    common = {"queue": queue, "cores": 1, "project": "proj_rapidresponse"}
-    iso3 = task_admins.index.get_level_values("iso3")
+# Per-task resources are predicted from each task's admin features, replacing the
+# old xxl/xl/big/standard tiers (one workflow, individually sized tasks). Model
+# calibrated on the 2026-07-06 full-run jobmon metadata (17,073 done tasks; see
+# .claude/validate_census_rake/calibrate_per_task_resources.py):
+#   MEMORY = margin * (floor
+#            + census-cache term: the country census parquet is scanned through
+#              the page cache each task (USA 11.7 GB -> ~26 GB floor)
+#            + box term ~ bounds_area: template + scatter arrays span the full
+#              bounding box (pop-0 maritime/arctic admins: huge bbox, little else)
+#            + covered-land term ~ area for POPULATED admins: the covered_pixels
+#              x n_tps working set (~0.22-0.24 GB per 1000 km^2, stable from 50k
+#              to 522k km^2); population==0 admins are heavily water-masked, so
+#              a small slope. NOTE a future *empty* fully-covered desert would be
+#              under-predicted and lean on the retry.)
+#   RUNTIME = margin * (floor + area term + perimeter term (convoluted CAN
+#             boundaries: high runtime at low memory)).
+# Coverage on the full run: 97.6% of tasks fit the first attempt; the 2.4% tail
+# (worst obs/request ratio 1.24) is fully covered by jobmon's default +50% retry
+# bump -- margins-not-maxima beats zero-retry tiers: 75% of the tiers' reserved
+# memory and 52% of their reserved runtime. SAU.8_1 (the 96 G kill, est ~115 GB)
+# gets a 166 G first attempt.
+MEMORY_FLOOR_GB = 3.5
+MEMORY_PER_CENSUS_GB = 2.0
+MEMORY_PER_KKM2_BOX = 0.012
+MEMORY_PER_KKM2_POPULATED = 0.24
+MEMORY_PER_KKM2_EMPTY = 0.04
+MEMORY_MARGIN = 1.15
+MEMORY_BOUNDS_GB = (8, 240)
+RUNTIME_FLOOR_MIN = 6.0
+RUNTIME_PER_KKM2 = 0.09
+RUNTIME_PER_KKM_PERIM = 2.5
+RUNTIME_MARGIN = 1.7
+RUNTIME_BOUNDS_MIN = (10, 240)
 
-    # Tiers + resources are sized from the full-run job metadata (jobmon max RSS,
-    # which includes the census-file page cache -- the number SLURM must satisfy).
-    # MEMORY scales with covered (land) pixels ~ area, plus a per-country census-cache
-    # floor (USA's 11.7 GB parquet). RUNTIME also scales with area, except a couple of
-    # extreme-perimeter admins (convoluted CAN lakes) that are runtime-bound but light.
-    # First attempts are set just above each tier's observed max; retries absorb the
-    # tail. Observed per-tier max RSS / runtime (n done):
-    #   * standard: area <= 5e4 m^2*1e6, non-USA (11,440) -> <= 12.7 GB / 18.9 min
-    #   * big:      USA (census floor) or 5e4-1e5 km^2 (5,542) -> <= 29.1 GB / 14.9 min
-    #   * xl:       area > 1e5 km^2 or perimeter > 4000 km (99) -> <= 81.5 GB / 56 min
-    #               (only SAU.7_1 exceeds 64 GB -> the one memory retry to 96)
-    #   * xxl:      area > 4e5 km^2 AND populated -> ~115 GB. Memory tracks covered
-    #               *land*: a populated desert (SAU.8_1, 522k km^2 / 5.1M pop) is fully
-    #               covered -> ~115 GB, but the empty arctic CAN giants (same size,
-    #               population 0, water-masked) only hit ~52 GB and stay in xl. NOTE: a
-    #               future *empty* huge desert would slip to xl and lean on its retry.
-    is_xxl = (task_admins["area"] > 4e11) & (task_admins["population_total"] > 0)
-    is_xl = ((task_admins["area"] > 1e11) | (task_admins["perimeter"] > 4e6)) & ~is_xxl
-    is_big = ((iso3 == "USA") | (task_admins["area"] > 5e10)) & ~is_xl & ~is_xxl
 
-    workflows = {
-        "xxl": {
-            "kwargs": {
-                "task_resources": {**common, "memory": "148G", "runtime": "120m"},
-                "max_attempts": 2,
-                "resource_scales": {
-                    "memory":  iter([192     ]),  # G (est peak ~115 G; headroom for huge box transients)
-                    "runtime": iter([150 * 60]),  # seconds
-                },
-            },
-            "task_idx": task_admins.loc[is_xxl].index,
-        },
-        "xl": {
-            "kwargs": {
-                "task_resources": {**common, "memory": "64G", "runtime": "45m"},
-                "max_attempts": 2,
-                "resource_scales": {
-                    "memory":  iter([96     ]),  # G (only SAU.7_1 at ~82 GB needs it)
-                    "runtime": iter([90 * 60]),  # seconds (SAU.7_1 took 56 min at 96 G)
-                },
-            },
-            "task_idx": task_admins.loc[is_xl].index,
-        },
-        "big": {
-            "kwargs": {
-                "task_resources": {**common, "memory": "32G", "runtime": "22m"},
-                "max_attempts": 3,
-                "resource_scales": {
-                    "memory":  iter([48     , 64      ]),  # G
-                    "runtime": iter([45 * 60, 90 * 60]),  # seconds
-                },
-            },
-            "task_idx": task_admins.loc[is_big].index,
-        },
-        "standard": {
-            "kwargs": {
-                "task_resources": {**common, "memory": "16G", "runtime": "25m"},
-                "max_attempts": 3,
-                "resource_scales": {
-                    "memory":  iter([30     , 45      ]),  # G
-                    "runtime": iter([50 * 60, 90 * 60]),  # seconds
-                },
-            },
-            "task_idx": task_admins.loc[~is_xxl & ~is_xl & ~is_big].index,
-        },
+def build_task_resources(
+    pm_data: PopulationModelData,
+    task_admins: gpd.GeoDataFrame,
+) -> dict[tuple[str, str, str], dict[str, str]]:
+    """Predicted memory/runtime per (iso3, census_time_point, task_parent_id)."""
+    features = task_admins.reset_index()
+    census_gb = {
+        (iso3, ctp): pm_data.census_path(iso3, ctp.split("q")[0]).stat().st_size / 1e9
+        for iso3, ctp in features[["iso3", "census_time_point"]]
+        .drop_duplicates()
+        .itertuples(index=False, name=None)
     }
-    return workflows
+    cache_gb = pd.Series(
+        [census_gb[key] for key in zip(features["iso3"], features["census_time_point"], strict=True)],
+        index=features.index,
+    )
+    area_kkm2 = features["area"] / 1e9
+    bounds_kkm2 = features["bounds_area"] / 1e9
+    perim_kkm = features["perimeter"] / 1e6
+    populated = features["population_total"] > 0
+
+    memory_gb = MEMORY_MARGIN * (
+        MEMORY_FLOOR_GB
+        + MEMORY_PER_CENSUS_GB * cache_gb
+        + MEMORY_PER_KKM2_BOX * bounds_kkm2
+        + np.where(populated, MEMORY_PER_KKM2_POPULATED, MEMORY_PER_KKM2_EMPTY) * area_kkm2
+    )
+    memory_gb = np.ceil(memory_gb.clip(*MEMORY_BOUNDS_GB)).astype(int)
+    runtime_min = RUNTIME_MARGIN * (
+        RUNTIME_FLOOR_MIN
+        + RUNTIME_PER_KKM2 * area_kkm2
+        + RUNTIME_PER_KKM_PERIM * perim_kkm
+    )
+    runtime_min = np.ceil(runtime_min.clip(*RUNTIME_BOUNDS_MIN)).astype(int)
+
+    return {
+        (iso3, ctp, tpid): {"memory": f"{mem}G", "runtime": f"{run}m"}
+        for iso3, ctp, tpid, mem, run in zip(
+            features["iso3"],
+            features["census_time_point"],
+            features["task_parent_id"],
+            memory_gb,
+            runtime_min,
+            strict=True,
+        )
+    }
 
 
 @click.command()
@@ -291,35 +299,36 @@ def census_rake(
     )
     complete_census_tasks = [i for i in complete_census_tasks if len(i) > 0]
 
-    workflows = build_workflows(task_admins, queue)
+    task_resources_by_task = build_task_resources(pm_data, task_admins)
 
-    for workflow_name, workflow in workflows.items():
-        census_tasks = (
-            workflow["task_idx"]
-            .drop(complete_census_tasks, errors="ignore")
+    complete = set(complete_census_tasks)
+    census_tasks = [task for task in possible_census_tasks if task not in complete]
+    if 0 < DOWNSAMPLE_ADMINS < len(census_tasks):
+        census_tasks = pd.Series(census_tasks).sample(DOWNSAMPLE_ADMINS).sort_index().tolist()
+
+    if len(census_tasks) > 0:
+        print(
+            f"Building raking factors for {len(census_tasks):,} census time-admins "
+            f"(out of a possible {len(possible_census_tasks):,})."
         )
-        if 0 < DOWNSAMPLE_ADMINS < len(census_tasks):
-            census_tasks = census_tasks.to_frame().sample(DOWNSAMPLE_ADMINS).sort_index().index
-        census_tasks = census_tasks.tolist()
-
-        if len(census_tasks) > 0:
-            print(
-                "\n"
-                f"WORKFLOW: {workflow_name}\n"
-                f"Building raking factors for {len(census_tasks):,} census time-admins (out of a possible {len(workflow["task_idx"]):,})."
-            )
-            jobmon.run_parallel(
-                runner="pmtask postprocess",
-                task_name="census_rake",
-                task_resources=workflow["kwargs"]["task_resources"],
-                flat_node_args=(("iso3", "time-point", "task-parent-id"), census_tasks),
-                task_args={
-                    "resolution": resolution,
-                    "version": version,
-                    "output-dir": output_dir,
-                },
-                max_attempts=workflow["kwargs"]["max_attempts"],
-                resource_scales=workflow["kwargs"]["resource_scales"],
-                log_root=pm_data.log_dir("postprocess_census_rake"),
-                concurrency_limit=1_000,
-            )
+        jobmon.run_parallel(
+            runner="pmtask postprocess",
+            task_name="census_rake",
+            task_resources={
+                "queue": queue,
+                "cores": 1,
+                "memory": f"{MEMORY_BOUNDS_GB[0]}G",
+                "runtime": f"{RUNTIME_BOUNDS_MIN[0]}m",
+                "project": "proj_rapidresponse",
+            },
+            flat_node_args=(("iso3", "time-point", "task-parent-id"), census_tasks),
+            per_task_resources=lambda args: task_resources_by_task[tuple(args)],
+            task_args={
+                "resolution": resolution,
+                "version": version,
+                "output-dir": output_dir,
+            },
+            max_attempts=2,
+            log_root=pm_data.log_dir("postprocess_census_rake"),
+            concurrency_limit=1_000,
+        )

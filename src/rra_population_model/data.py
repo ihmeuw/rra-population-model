@@ -1086,6 +1086,15 @@ class PopulationModelData:
             / f"{block_key}.tif"
         )
 
+    def list_gbd_raked_prediction_time_points(
+        self, resolution: str, version: str
+    ) -> list[str]:
+        return [
+            p.name
+            for p in self.gbd_raked_predictions_root(resolution, version).iterdir()
+            if p.is_dir()
+        ]
+
     def save_gbd_raked_prediction(
         self,
         raster: rt.RasterArray,

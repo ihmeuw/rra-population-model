@@ -1,12 +1,14 @@
 import click
 import geopandas as gpd
 import numpy as np
+import pandas as pd
+import pyproj
 import rasterio
 import rasterra as rt
 import shapely
 import tqdm
 from affine import Affine
-from rasterra._features import raster_geometry_mask
+from rasterio.features import rasterize
 from rra_tools import jobmon
 
 from rra_population_model import cli_options as clio
@@ -25,6 +27,62 @@ BOUNDARY_BLOCKS = 8
 # GDAL's block cache defaults to 5% of node RAM; cap it during reads so big
 # windowed VRT/COG reads don't inflate peak memory
 GDAL_CACHEMAX_MB = 512
+
+# Per-task resources are predicted from each country's bounding-box "canvas":
+# the float32 raster spanning its full extent at the model resolution, using
+# the antimeridian-recentered bbox where that is narrower. Observed jobmon max
+# RSS tracks the canvas tightly for both worker branches (peak <= ~3.5G +
+# ~3.0x canvas; runtime <= ~40s + ~23s per canvas GB; calibrated on five
+# single-time-point test runs -- see
+# .claude/early_access/calibrate_canvas_bins.py). Requests carry a 1.1x memory
+# and 2x runtime margin; jobmon's default +50% retry bump is the backstop.
+MEMORY_FLOOR_GB = 3.5
+MEMORY_PER_CANVAS_GB = 3.0
+MEMORY_MARGIN = 1.1
+MEMORY_BOUNDS_GB = (5, 480)
+RUNTIME_FLOOR_S = 40.0
+RUNTIME_PER_CANVAS_S = 23.0
+RUNTIME_MARGIN = 2.0
+MIN_RUNTIME_MIN = 5
+
+
+def location_canvas_gb(shapes: gpd.GeoDataFrame, pixel_size: float) -> pd.Series:
+    """Bounding-box canvas (GB of float32) per location at the model resolution."""
+    parts = shapes[["location_id", "geometry"]].explode(index_parts=False)
+    bounds = parts.bounds  # cylindrical equal-area maps a lon/lat bbox to a bbox
+    transformer = pyproj.Transformer.from_crs(
+        shapes.crs, pmc.CRSES["equal_area"].code, always_xy=True
+    )
+    min_x, min_y = transformer.transform(bounds.minx.to_numpy(), bounds.miny.to_numpy())
+    max_x, max_y = transformer.transform(bounds.maxx.to_numpy(), bounds.maxy.to_numpy())
+    world_width = 2 * np.abs(pmc.CRSES["equal_area"].bounds[0])
+    # parts crossing the prime meridian span the recentered map edge to edge
+    straddles = (min_x < 0) & (max_x >= 0)
+    extents = pd.DataFrame({
+        "location_id": parts["location_id"].to_numpy(),
+        "min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y,
+        # the same parts re-centered on the antimeridian
+        "min_x_am": np.where(straddles, 0.0, np.where(min_x < 0, min_x + world_width, min_x)),
+        "max_x_am": np.where(straddles, world_width, np.where(max_x < 0, max_x + world_width, max_x)),
+    }).groupby("location_id").agg(
+        min_x=("min_x", "min"), max_x=("max_x", "max"),
+        min_y=("min_y", "min"), max_y=("max_y", "max"),
+        min_x_am=("min_x_am", "min"), max_x_am=("max_x_am", "max"),
+    )
+    width = np.minimum(
+        extents["max_x"] - extents["min_x"],
+        extents["max_x_am"] - extents["min_x_am"],
+    )
+    height = extents["max_y"] - extents["min_y"]
+    return (width / pixel_size) * (height / pixel_size) * 4 / 1024**3
+
+
+def location_resources(canvas_gb: float) -> dict[str, str]:
+    memory_gb = MEMORY_MARGIN * (MEMORY_FLOOR_GB + MEMORY_PER_CANVAS_GB * canvas_gb)
+    memory_gb = int(np.ceil(np.clip(memory_gb, *MEMORY_BOUNDS_GB)))
+    runtime_min = RUNTIME_MARGIN * (RUNTIME_FLOOR_S + RUNTIME_PER_CANVAS_S * canvas_gb) / 60
+    runtime_min = int(np.ceil(max(runtime_min, MIN_RUNTIME_MIN)))
+    return {"memory": f"{memory_gb}G", "runtime": f"{runtime_min}m"}
 
 
 def snap_to_grid(
@@ -45,6 +103,52 @@ def snap_to_grid(
         grid_x_min + np.ceil((x_max - grid_x_min) / pixel_size) * pixel_size,
         grid_y_min + np.ceil((y_max - grid_y_min) / pixel_size) * pixel_size,
     )
+
+
+def rasterize_outside_mask(
+    raster: rt.RasterArray,
+    geometry: shapely.Polygon | shapely.MultiPolygon,
+    max_strip_bytes: int = 2**29,
+) -> np.ndarray:
+    """Boolean mask of cells outside the geometry, rasterized in row strips.
+
+    GDAL burns geometries through a float64 buffer covering the rasterized
+    extent (8 bytes/pixel), so one-shot rasterization of a large country
+    transiently costs 2x the country canvas; strips bound that.
+    """
+    height, width = raster._ndarray.shape
+    strip_rows = max(1, min(height, max_strip_bytes // (width * 8)))
+    outside = np.empty((height, width), dtype=bool)
+    t = raster.transform
+    for row_start in range(0, height, strip_rows):
+        row_stop = min(row_start + strip_rows, height)
+        # clip the geometry to the strip first: rasterize() re-converts and
+        # re-validates every vertex of the shapes it is given per call, which
+        # is ruinously slow for complex coastlines repeated over many strips
+        clipped = shapely.clip_by_rect(
+            geometry,
+            t.c,
+            t.f + row_stop * t.e,
+            t.c + width * t.a,
+            t.f + row_start * t.e,
+        )
+        # clipping can leave degenerate lines/points where the geometry only
+        # touches the strip edge; keep polygons only
+        if clipped.geom_type == "GeometryCollection":
+            clipped = shapely.union_all(
+                [g for g in shapely.get_parts(clipped) if g.geom_type == "Polygon"]
+            )
+        if clipped.is_empty or clipped.geom_type not in ("Polygon", "MultiPolygon"):
+            outside[row_start:row_stop] = True
+            continue
+        outside[row_start:row_stop] = rasterize(
+            [clipped],
+            out_shape=(row_stop - row_start, width),
+            transform=t * Affine.translation(0, row_start),
+            fill=1,
+            default_value=0,
+        )
+    return outside
 
 
 def shift_to_antimeridian(raster: rt.RasterArray) -> rt.RasterArray:
@@ -144,20 +248,24 @@ def admin_rasters_main(
         # tile edges sit on the model grid, so any tile corner anchors the snap
         grid_x_min, grid_y_min, _, _ = modeling_frame.total_bounds
         load_bounds = snap_to_grid(geometry.bounds, grid_x_min, grid_y_min, pixel_size)
+        vrt_path = pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population")
         with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHEMAX_MB):
-            raster = rt.load_raster(
-                pm_data.compiled_prediction_vrt_path(time_point, model_spec, measure="population"),
-                load_bounds,
-            )
-        # mask in place rather than via raster.mask(), which would copy the
-        # full country canvas
-        outside = raster_geometry_mask(
-            data_transform=raster.transform,
-            data_width=raster._ndarray.shape[1],
-            data_height=raster._ndarray.shape[0],
-            shapes=[geometry],
-        )[0]
-        raster._ndarray[outside] = raster.no_data_value
+            # windowed read directly via rasterio: rt.load_raster's boundless
+            # read allocates ~2 extra copies of the window, and the snapped
+            # window is always inside the VRT so boundless is unnecessary
+            with rasterio.open(vrt_path) as f:
+                window = rasterio.windows.from_bounds(*load_bounds.bounds, transform=f.transform)
+                raster = rt.RasterArray(
+                    f.read(1, window=window),
+                    transform=f.window_transform(window),
+                    crs=f.crs,
+                    no_data_value=f.nodata,
+                )
+            # mask in place rather than via raster.mask(), which would copy
+            # the full country canvas
+            outside = rasterize_outside_mask(raster, geometry)
+            raster._ndarray[outside] = raster.no_data_value
+            del outside
 
     print("Setting zeros to no data")
     # in place to avoid copying the full country canvas
@@ -210,6 +318,13 @@ def admin_rasters(
     hierarchy = pm_data.load_gbd_raking_input("hierarchy", HIERARCHY_VERSION)
     national = hierarchy.loc[hierarchy['level'] == 3, ['location_id', 'ihme_loc_id']]
 
+    shapes = pm_data.load_gbd_raking_input("shapes", SHAPES_VERSION)
+    canvas_gb = location_canvas_gb(shapes, float(resolution))
+    resources = {
+        location_id: location_resources(canvas_gb[location_id])
+        for location_id in national['location_id']
+    }
+
     to_run = []
     complete = 0
     for location_id, ihme_loc_id in national.itertuples(index=False):
@@ -232,14 +347,11 @@ def admin_rasters(
         },
         task_resources={
             "queue": queue,
-            "memory": "8G",
-            "runtime": "6m",
             "project": "proj_rapidresponse",
+            "memory": f"{MEMORY_BOUNDS_GB[0]}G",
+            "runtime": f"{MIN_RUNTIME_MIN}m",
         },
-        max_attempts=4,
-        resource_scales={
-            "memory":  iter([30     , 100    , 500    ]),  # G
-            "runtime": iter([10 * 60, 30 * 60, 30 * 60]),  # seconds
-        },
+        per_task_resources=lambda args: resources[args[0]],
+        max_attempts=2,
         log_root=pm_data.log_dir("postprocess_admin_rasters"),
     )

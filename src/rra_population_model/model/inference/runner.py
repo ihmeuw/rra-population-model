@@ -142,8 +142,8 @@ def inference(
     else:
         msg = f"Unexpected denominator: {model_spec.denominator}"
         raise ValueError(msg)
-    # time_points = ["2020q1", "2021q1", "2022q1"]
-    # versions = [f"2025_12_18.0{(i + 1):02d}" for i in range(36)]
+    # time_points = ["2020q1", "2020q2"]
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
     print(f"Running inference for {len(time_points)} time points.")
 
     jobmon.run_parallel(

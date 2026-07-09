@@ -259,7 +259,7 @@ def training_data(
             max_attempts=5,
             resource_scales={
                 "memory":  iter([20     , 40     , 80     , 240    ]),  # G
-                "runtime": iter([10 * 60, 15 * 60, 20 * 60, 90 * 60]),  # seconds
+                "runtime": iter([10 * 60, 20 * 60, 30 * 60, 90 * 60]),  # seconds
             },
             log_root=pm_data.log_dir("model_prep_training_data"),
         )

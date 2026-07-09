@@ -168,8 +168,8 @@ def metrics(
     validation_frame = pm_data.load_validation_frame(resolution)
     block_keys = list(validation_frame.block_key.unique())
 
-    # versions = [f"2025_12_18.0{(i + 1):02d}" for i in range(36)]
-    # print(f"Running {len(block_keys) * len(versions) * len(time_points)} validation jobs")
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
+
     jobmon.run_parallel(
         runner="pmtask validate",
         task_name="pixel_metrics",
@@ -187,9 +187,9 @@ def metrics(
         },
         task_args={
             "version": version,
-            "time-point": time_point,
             "resolution": resolution,
             "output-dir": output_dir,
+            "time-point": time_point,
         },
         max_attempts=3,
         log_root=pm_data.log_dir("validate_pixel_metrics"),

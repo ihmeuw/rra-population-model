@@ -9,17 +9,62 @@ import shapely
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
-from rra_population_model.postprocess.utils import get_prediction_time_point
+from rra_population_model.postprocess.utils import (
+    block_census_tasks,
+    get_prediction_time_point,
+    load_block_census_layer,
+    repair_invalid_geometries,
+)
+
+STAGES = ["final", "gbd"]
+
+
+def build_raking_factor_raster(
+    raking_data: gpd.GeoDataFrame,
+    like: rt.RasterArray,
+) -> rt.RasterArray:
+    """Rasterize per-admin raking factors onto ``like``'s grid (NaN outside)."""
+    raking_factor_data = np.nan * np.ones_like(like)
+    for geom, rf in raking_data[["geometry", "raking_factor"]].itertuples(index=False):
+        shape_mask, *_ = raster_geometry_mask(
+            data_transform=like.transform,
+            data_width=like.shape[1],
+            data_height=like.shape[0],
+            shapes=[geom],
+            invert=True,
+        )
+        raking_factor_data[shape_mask] = rf
+    return rt.RasterArray(
+        raking_factor_data,
+        transform=like.transform,
+        crs=like.crs,
+        no_data_value=np.nan,
+    )
 
 
 def rake_main(
     resolution: str,
     version: str,
-    input_data: str,
+    stage: str,
+    census: bool,
     block_key: str,
     time_point: str,
     output_dir: str,
 ) -> None:
+    """Write one raked block raster, computed entirely from immutable inputs.
+
+    stage "final" (the pipeline product, written once to raked_predictions/):
+        (raw x initial raking factor) -> splice census layer -> x final raking
+        factor. With ``census=False`` (GBD-only model versions, e.g. validation
+        runs) the splice and the final factor are skipped and raw x initial IS
+        the version's final product.
+    stage "gbd" (on-demand product, written to gbd_raked_predictions/):
+        raw x initial raking factor -- the GBD-raked surface without census
+        information, used by the pseudo-OOS validation against censuses.
+
+    No stage reads anything another rake task writes, so retries are idempotent
+    and reruns are safe.
+    """
     pm_data = PopulationModelData(output_dir)
 
     print("Loading metadata")
@@ -27,123 +72,68 @@ def rake_main(
     prediction_time_point = get_prediction_time_point(
         pm_data, resolution, version, time_point
     )
-    print("Loading unraked prediction")
-    if input_data in ["raw", "raw_skip"]:
-        unraked_data = pm_data.load_raw_prediction(
-            block_key, prediction_time_point, model_spec
-        )
-    elif input_data == "raked":
-        unraked_data = pm_data.load_raked_prediction(
-            block_key, prediction_time_point, model_spec
-        )
+    print("Loading raw prediction")
+    unraked_data = pm_data.load_raw_prediction(
+        block_key, prediction_time_point, model_spec
+    )
 
-    print("Loading raking factors")
+    print("Loading initial raking factors")
     raking_data = pm_data.load_raking_factors(
         time_point,
         model_spec,
+        stage="initial",
         filters=[("block_key", "==", block_key)],
     )
 
     print("Raking")
     if raking_data.empty:
-        raking_factor = rt.RasterArray(
+        raked = rt.RasterArray(
             np.nan * np.ones_like(unraked_data),
             transform=unraked_data.transform,
             crs=unraked_data.crs,
             no_data_value=np.nan,
         )
-        raked = raking_factor
     else:
-        raking_factor_data = np.nan * np.ones_like(unraked_data)
-        for geom, rf in raking_data[["geometry", "raking_factor"]].itertuples(
-            index=False
-        ):
-            shape_mask, *_ = raster_geometry_mask(
-                data_transform=unraked_data.transform,
-                data_width=unraked_data.shape[1],
-                data_height=unraked_data.shape[0],
-                shapes=[geom],
-                invert=True,
-            )
-            raking_factor_data[shape_mask] = rf
+        raked = unraked_data * build_raking_factor_raster(raking_data, unraked_data)
 
-        raking_factor = rt.RasterArray(
-            raking_factor_data,
-            transform=unraked_data.transform,
-            crs=unraked_data.crs,
-            no_data_value=np.nan,
-        )
-        raked = unraked_data * raking_factor
-
-        if input_data == "raw":
-            print("Loading raked_census data")
+        if stage == "final" and census:
+            print("Splicing census layer")
             model_frame = pm_data.load_modeling_frame(resolution)
             model_frame = model_frame.loc[model_frame["block_key"] == block_key]
             block_geometry = model_frame.union_all()
 
             task_admins, census_weights = pm_data.load_census_raking_inputs(model_spec)
-            # task_admins stores raw parent geometries -- get_task_admins never repairs
-            # them (only the child census geometries are made valid, at census-rake
-            # time). An invalid geometry makes .intersects raise a GEOSException, so
-            # repair the few invalid ones before the spatial filter.
-            invalid = ~task_admins.geometry.is_valid
-            if invalid.any():
-                task_admins.loc[invalid, "geometry"] = task_admins.loc[
-                    invalid, "geometry"
-                ].make_valid()
-            task_admins = task_admins.loc[task_admins.intersects(block_geometry)]
-            task_admins = list(
-                task_admins
-                .reset_index()
-                .loc[:, ["iso3", "task_parent_id", "census_time_point"]]
-                .itertuples(index=False, name=None)
+            task_admins = repair_invalid_geometries(task_admins)
+            census_layer = load_block_census_layer(
+                pm_data,
+                model_spec,
+                block_geometry,
+                prediction_time_point,
+                block_census_tasks(task_admins, block_geometry),
+                census_weights,
             )
-            # A census only brackets a subset of model time points, so it only has a
-            # written raster + a weight for those. Restrict to the (iso3,
-            # census_time_point) pairs that contribute to THIS prediction time point:
-            # with one census per country that's all of them; with several it avoids
-            # loading a raster/weight that was never produced for a non-contributing
-            # census (which would otherwise be a missing-file / KeyError crash).
-            weights_here = census_weights.reset_index()
-            contributing = set(
-                weights_here.loc[
-                    weights_here["model_time_point"] == prediction_time_point,
-                    ["iso3", "census_time_point"],
-                ].itertuples(index=False, name=None)
+            if census_layer is not None:
+                raked = rt.merge([census_layer, raked], method="first")
+
+            print("Applying final raking factors")
+            final_raking_data = pm_data.load_raking_factors(
+                time_point,
+                model_spec,
+                stage="final",
+                filters=[("block_key", "==", block_key)],
             )
-            census_population = []
-            for iso3, shape_id, census_time_point in task_admins:
-                if (iso3, census_time_point) not in contributing:
-                    continue
-                raked_census = pm_data.load_raked_census(
-                    iso3,
-                    shape_id,
-                    prediction_time_point,
-                    census_time_point,
-                    model_spec,
-                    bounds=block_geometry.bounds,
+            if set(final_raking_data["location_id"]) != set(raking_data["location_id"]):
+                raise ValueError(
+                    "Initial and final raking factors disagree on this block's "
+                    "admins; both stages must be built from the same raking shapes."
                 )
-                if np.isnan(raked_census.to_numpy()).all():
-                    # Admins with no predicted pixels write a minimal all-nodata
-                    # raster; drop it here (it contributes nothing and would only
-                    # inflate the merge extent). A *missing* tif raises above,
-                    # surfacing a failed job instead of silently dropping it.
-                    continue
-                raked_census = raked_census.clip(block_geometry).mask(block_geometry)
-                census_population.append(
-                    raked_census
-                    *
-                    census_weights.loc[iso3, prediction_time_point, census_time_point].item()
-                )
-            if census_population:
-                census_population = rt.merge(census_population, method="sum")
-                raked = rt.merge([census_population, raked], method="first")
+            raked = raked * build_raking_factor_raster(final_raking_data, raked)
 
-        elif input_data not in ["raked", "raw_skip"]:
-            raise ValueError(f"Invalid `input_data` type: {input_data}")
-
-    print("Saving raked prediction")
-    pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)
+    print("Saving")
+    if stage == "final":
+        pm_data.save_raked_prediction(raked, block_key, time_point, model_spec)
+    else:
+        pm_data.save_gbd_raked_prediction(raked, block_key, time_point, model_spec)
 
 
 def create_bounds_polygon(raster_data: rt.RasterArray) -> shapely.Polygon:
@@ -167,51 +157,60 @@ def create_bounds_polygon(raster_data: rt.RasterArray) -> shapely.Polygon:
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
-@click.option("--input-data", type=str, required=True)
+@click.option("--stage", type=click.Choice(STAGES), required=True)
+@click.option("--census", type=bool, default=True, show_default=True)
 @clio.with_block_key()
 @clio.with_time_point(choices=None)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def rake_task(
     resolution: str,
     version: str,
-    input_data: str,
+    stage: str,
+    census: bool,
     block_key: str,
     time_point: str,
     output_dir: str,
 ) -> None:
-    rake_main(resolution, version, input_data, block_key, time_point, output_dir)
+    rake_main(resolution, version, stage, census, block_key, time_point, output_dir)
 
 
 @click.command()
 @clio.with_resolution(allow_all=False)
 @clio.with_version()
-@click.option("--input-data", type=str, required=True)
+@click.option("--stage", type=click.Choice(STAGES), required=True)
+@click.option("--census", type=bool, default=True, show_default=True)
 @clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def rake(
     resolution: str,
     version: str,
-    input_data: str,
+    stage: str,
+    census: bool,
     time_point: str,
     output_dir: str,
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    if input_data in ["raw", "raw_skip"]:
-        if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
-            raise ValueError(f"Raked predictions already exist, cannot run with `input_data` set to `raw`.")
-    elif input_data not in ["raked"]:
-        raise ValueError(f"Invalid `input_data` type: {input_data}")
+    if stage == "gbd" and not census:
+        raise ValueError("--census False only applies to --stage final.")
 
-    rf_time_points = pm_data.list_raking_factor_time_points(resolution, version)
-    time_points = clio.convert_choice(time_point, rf_time_points)
+    # Fail fast on missing raking factors rather than mid-workflow.
+    rf_time_points = set(
+        pm_data.list_raking_factor_time_points(resolution, version, stage="initial")
+    )
+    splicing = stage == "final" and census
+    if splicing:
+        rf_time_points &= set(
+            pm_data.list_raking_factor_time_points(resolution, version, stage="final")
+        )
+    time_points = clio.convert_choice(time_point, sorted(rf_time_points))
 
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()
 
     if resolution == "40":
-        if input_data == "raw":
+        if splicing:
             task_resources = {
                 "queue": queue,
                 "cores": 1,
@@ -237,24 +236,20 @@ def rake(
         }
 
     print(f"Raking {len(block_keys) * len(time_points)} blocks")
-    # for time_point in time_points:
-    # print("##############################################################")
-    # print(f"Raking {len(block_keys) * len(versions)} blocks for {time_point}")
     jobmon.run_parallel(
         runner="pmtask postprocess",
         task_name="rake",
         task_resources=task_resources,
         node_args={
-            # "version": versions,
             "block-key": block_keys,
             "time-point": time_points,
         },
         task_args={
             "version": version,
-            # "time-point": time_point,
             "resolution": resolution,
             "output-dir": output_dir,
-            "input-data": input_data,
+            "stage": stage,
+            "census": census,
         },
         max_attempts=3,
         log_root=pm_data.log_dir("postprocess_rake"),

@@ -971,20 +971,34 @@ class PopulationModelData:
         return self.model_version_root(resolution, version) / "raking_factors"
 
     def raking_factor_path(
-        self, time_point: str, model_spec: "ModelSpecification"
+        self,
+        time_point: str,
+        model_spec: "ModelSpecification",
+        stage: str | None = None,
     ) -> Path:
-        return (
-            self.raking_factors_root(model_spec.resolution, model_spec.model_version)
-            / f"{time_point}.parquet"
-        )
+        # ``stage`` selects the single-write pipeline layout: "initial" (factors
+        # from raw predictions) or "final" (factors from the census-spliced field).
+        # Left as None it reads the legacy top-level layout, where the flat file
+        # holds whichever pass last wrote it -- so old code reading old versions
+        # runs as-is, while code asking for a stage on a pre-stage version fails
+        # loudly instead of silently getting the wrong pass (no fallback).
+        root = self.raking_factors_root(model_spec.resolution, model_spec.model_version)
+        if stage is not None:
+            if stage not in ("initial", "final"):
+                raise ValueError(f"Invalid raking factor stage: {stage}")
+            root = root / stage
+        return root / f"{time_point}.parquet"
 
     def list_raking_factor_time_points(
-        self, resolution: str, version: str
+        self, resolution: str, version: str, stage: str | None = None
     ) -> list[str]:
+        root = self.raking_factors_root(resolution, version)
+        if stage is not None:
+            root = root / stage
         return [
             p.stem
-            for p in self.raking_factors_root(resolution, version).iterdir()
-            if p.is_file()
+            for p in root.iterdir()
+            if p.is_file() and p.suffix == ".parquet"
         ]
 
     def save_raking_factors(
@@ -992,8 +1006,10 @@ class PopulationModelData:
         raking_factors: gpd.GeoDataFrame,
         time_point: str,
         model_spec: "ModelSpecification",
+        stage: str | None = None,
     ) -> None:
-        path = self.raking_factor_path(time_point, model_spec)
+        path = self.raking_factor_path(time_point, model_spec, stage)
+        mkdir(path.parent, parents=True, exist_ok=True)
         touch(path, clobber=True)
         raking_factors.to_parquet(path)
 
@@ -1001,9 +1017,11 @@ class PopulationModelData:
         self,
         time_point: str,
         model_spec: "ModelSpecification",
+        *,
+        stage: str | None = None,
         **kwargs: Any,
     ) -> gpd.GeoDataFrame:
-        path = self.raking_factor_path(time_point, model_spec)
+        path = self.raking_factor_path(time_point, model_spec, stage)
         return gpd.read_parquet(path, **kwargs)
 
     def raked_predictions_root(self, resolution: str, version: str) -> Path:
@@ -1050,6 +1068,44 @@ class PopulationModelData:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
         raster = rt.load_raster(path, subset_bounds)
         return raster
+
+    def gbd_raked_predictions_root(self, resolution: str, version: str) -> Path:
+        # On-demand product (raw x initial raking factor, no census splice) used by
+        # the pseudo-OOS validation; the core pipeline never reads it, so a partial
+        # set of time points is fine.
+        return self.model_version_root(resolution, version) / "gbd_raked_predictions"
+
+    def gbd_raked_prediction_path(
+        self, block_key: str, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
+        return (
+            self.gbd_raked_predictions_root(resolution, version)
+            / time_point
+            / f"{block_key}.tif"
+        )
+
+    def save_gbd_raked_prediction(
+        self,
+        raster: rt.RasterArray,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> None:
+        path = self.gbd_raked_prediction_path(block_key, time_point, model_spec)
+        mkdir(path.parent, parents=True, exist_ok=True)
+        save_raster(raster, path)
+
+    def load_gbd_raked_prediction(
+        self,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
+        subset_bounds: shapely.Polygon | None = None,
+    ) -> rt.RasterArray:
+        path = self.gbd_raked_prediction_path(block_key, time_point, model_spec)
+        return rt.load_raster(path, subset_bounds)
 
     def compiled_predictions_root(self, resolution: str, version: str, measure: str = "") -> Path:
         return self.model_version_root(resolution, version) / "compiled_predictions" / measure

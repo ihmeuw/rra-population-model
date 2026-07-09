@@ -35,14 +35,14 @@ GDAL_CACHEMAX_MB = 512
 # ~3.0x canvas; runtime <= ~40s + ~23s per canvas GB; calibrated on five
 # single-time-point test runs -- see
 # .claude/early_access/calibrate_canvas_bins.py). Requests carry a 1.1x memory
-# and 2x runtime margin; jobmon's default +50% retry bump is the backstop.
+# and 1.5x runtime margin; jobmon's default +50% retry bump is the backstop.
 MEMORY_FLOOR_GB = 3.5
 MEMORY_PER_CANVAS_GB = 3.0
 MEMORY_MARGIN = 1.1
 MEMORY_BOUNDS_GB = (5, 480)
 RUNTIME_FLOOR_S = 40.0
 RUNTIME_PER_CANVAS_S = 23.0
-RUNTIME_MARGIN = 2.0
+RUNTIME_MARGIN = 1.5
 MIN_RUNTIME_MIN = 2
 
 
@@ -354,4 +354,5 @@ def admin_rasters(
         per_task_resources=lambda args: resources[args[0]],
         max_attempts=2,
         log_root=pm_data.log_dir("postprocess_admin_rasters"),
+        concurrency_limit=1_000,
     )

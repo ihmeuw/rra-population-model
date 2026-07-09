@@ -82,7 +82,7 @@ def aggregate_unraked_population(
     pm_data = PopulationModelData()
     model_spec = pm_data.load_model_specification(resolution, model_version)
 
-    if input_data in ["raw", "raw_skip"]:
+    if input_data == "raw":
         r = pm_data.load_raw_prediction(block_key, time_point, model_spec)
     elif input_data == "raked":
         r = pm_data.load_raked_prediction(block_key, time_point, model_spec)
@@ -226,7 +226,7 @@ def raking_factors(
     queue: str,
 ) -> None:
     pm_data = PopulationModelData(output_dir)
-    if input_data in ["raw", "raw_skip"]:
+    if input_data == "raw":
         if len(list(pm_data.raked_predictions_root(resolution, version).iterdir())) > 0:
             raise ValueError(f'Raked predictions already exist, cannot run with `input_data` set to `raw`.')
     elif input_data not in ["raked"]:

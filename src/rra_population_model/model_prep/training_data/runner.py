@@ -2,6 +2,7 @@ import itertools
 from pathlib import Path
 
 import click
+import numpy as np
 import pandas as pd
 from rra_tools import jobmon
 
@@ -98,6 +99,7 @@ def training_data_main(
                     .loc[(tile_gdf['census_time_point'] == data_time_point) & (tile_gdf['time_point'] == data_time_point)]
                     .set_index(['admin_id', 'pixel_id'])
                     .loc[:, f'pixel_occupancy_rate_{denominator}']
+                    .clip(0, np.inf)
                 )
                 pixel_built = (
                     tile_gdf
@@ -237,8 +239,6 @@ def training_data(
     print("############################################################")
     for year in years:
         to_run_year = [i for i in to_run if i[1].startswith(year)]
-        # year = '2023q1-2024q2'
-        # to_run_year = [i for i in to_run if i[1].startswith('2023') or i[1].startswith('2024')]
         print(f"Building {purpose} data for {len(to_run_year)} tiles for {year}.")
         status = jobmon.run_parallel(
             runner="pmtask model_prep",

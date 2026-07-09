@@ -29,7 +29,7 @@ def mosaic_main(
 
     pop_paths = []
     denom_paths = []
-    poverty_paths = []
+    # poverty_paths = []
     for x, y in itertools.product(range(STRIDE), range(STRIDE)):
         bx_, by_ = STRIDE * bx + x, STRIDE * by + y
         block_key = f"B-{bx_:>04}X-{by_:>04}Y"
@@ -37,12 +37,12 @@ def mosaic_main(
             continue
         pop_paths.append(pm_data.raked_prediction_path(block_key, time_point, model_spec))
         denom_paths.append(pm_data.feature_path(resolution, block_key, model_spec.denominator, time_point))
-        poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
+        # poverty_paths.append(f"{model_spec.output_root}/poverty/{time_point}/{block_key}/1000m.tif")
 
     print("loading rasters")
     pop_raster = rt.load_mf_raster(pop_paths)
     denom_raster = rt.load_mf_raster(denom_paths)
-    poverty_raster = rt.load_mf_raster(poverty_paths)
+    # poverty_raster = rt.load_mf_raster(poverty_paths)
 
     print("writing cog")
     group_key = f"G-{bx:>04}X-{by:>04}Y"
@@ -65,15 +65,15 @@ def mosaic_main(
             num_cores=num_cores,
             resampling="average",
         )
-    pm_data.save_compiled_prediction(
-        raster=poverty_raster,
-        group_key=group_key,
-        time_point=time_point,
-        model_spec=model_spec,
-        measure="poverty",
-        num_cores=num_cores,
-        resampling="average",
-    )
+    # pm_data.save_compiled_prediction(
+    #     raster=poverty_raster,
+    #     group_key=group_key,
+    #     time_point=time_point,
+    #     model_spec=model_spec,
+    #     measure="poverty",
+    #     num_cores=num_cores,
+    #     resampling="average",
+    # )
 
 
 @click.command()
@@ -173,9 +173,9 @@ def mosaic(
     print("Building VRTs")
     model_spec = pm_data.load_model_specification(resolution, version)
     if resolution == "40":
-        measures = ["population", "building", "change", "poverty"]
+        measures = ["population", "building", "change"]  # , "poverty"
     else:
-        measures = ["population", "poverty"]
+        measures = ["population"]  # , "poverty"
     for measure in measures:
         measure_time_points = pm_data.list_compiled_prediction_time_points(resolution, version, measure)
         utils.make_vrts(

@@ -43,7 +43,7 @@ MEMORY_BOUNDS_GB = (5, 480)
 RUNTIME_FLOOR_S = 40.0
 RUNTIME_PER_CANVAS_S = 23.0
 RUNTIME_MARGIN = 2.0
-MIN_RUNTIME_MIN = 5
+MIN_RUNTIME_MIN = 2
 
 
 def location_canvas_gb(shapes: gpd.GeoDataFrame, pixel_size: float) -> pd.Series:

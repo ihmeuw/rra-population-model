@@ -148,6 +148,16 @@ def with_block_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     )
 
 
+def with_location_id[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
+    return click.option(
+        "--location-id",
+        "-l",
+        type=click.INT,
+        required=True,
+        help="GBD location ID to run.",
+    )
+
+
 def with_tile_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--tile-key",
@@ -155,20 +165,6 @@ def with_tile_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
         type=click.STRING,
         required=True,
         help="Tile key of tile to run.",
-    )
-
-
-def with_purpose[**P, T](
-    choices: Collection[str] = pmc.DATA_PURPOSES,
-    *,
-    allow_all: bool = False,
-) -> Callable[[Callable[P, T]], Callable[P, T]]:
-    return with_choice(
-        "purpose",
-        allow_all=allow_all,
-        choices=choices,
-        help="Data purpose to run.",
-        convert=allow_all,
     )
 
 
@@ -182,11 +178,11 @@ __all__ = [
     "with_dry_run",
     "with_input_directory",
     "with_iso3",
+    "with_location_id",
     "with_num_cores",
     "with_output_directory",
     "with_overwrite",
     "with_progress_bar",
-    "with_purpose",
     "with_queue",
     "with_resolution",
     "with_tile_key",

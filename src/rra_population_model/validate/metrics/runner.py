@@ -64,9 +64,14 @@ def pixel_metrics_main(
     )
     block_poly = block_frame.geometry.iloc[0]
 
-    print("Loading raked population predictions")
+    print("Loading GBD-raked population predictions")
+    # The pseudo-OOS compares GBD-raked predictions against censuses, so it must
+    # read the gbd_raked product (raw x initial raking factor, NO census splice)
+    # -- the final raked_predictions have census information baked in, which
+    # would make the comparison circular. Materialize the needed time points
+    # with `rake --stage gbd` first.
     model_spec = pm_data.load_model_specification(resolution, version)
-    pop_raster = pm_data.load_raked_prediction(block_key, time_point, model_spec)
+    pop_raster = pm_data.load_gbd_raked_prediction(block_key, time_point, model_spec)
     pop_arr = pop_raster._ndarray  # noqa: SLF001
 
     print("Loading and subsetting census data")
@@ -156,9 +161,11 @@ def metrics(
 ) -> None:
     pm_data = PopulationModelData(output_dir)
 
-    time_points = pm_data.list_raked_prediction_time_points(resolution, version)
+    time_points = pm_data.list_gbd_raked_prediction_time_points(resolution, version)
     time_points = [time_point for time_point in time_points if time_point.endswith("q1")]
-    if time_point not in time_points:
+    if time_point in time_points:
+        time_points = [time_point]
+    elif time_point is not None:
         msg = (
             f"Time point {time_point} not found in {resolution} {version}.\n"
             f"Valid time points are: {time_points}"
@@ -176,20 +183,20 @@ def metrics(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "15G",
-            "runtime": "60m",
+            "memory": "20G",
+            "runtime": "10m",
             "project": "proj_rapidresponse",
         },
         node_args={
             "block-key": block_keys,
             # "version": versions,
-            # "time-point": time_points,
+            "time-point": time_points,
         },
         task_args={
             "version": version,
             "resolution": resolution,
             "output-dir": output_dir,
-            "time-point": time_point,
+            # "time-point": time_point,
         },
         max_attempts=3,
         log_root=pm_data.log_dir("validate_pixel_metrics"),

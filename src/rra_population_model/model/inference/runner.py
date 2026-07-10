@@ -160,8 +160,8 @@ def inference(
         },
         task_resources={
             "queue": queue,
-            "memory": "40G",
-            "runtime": "720m",
+            "memory": "24G",
+            "runtime": "360m",
             "project": "proj_rapidresponse",
         },
         log_root=pm_data.log_dir("model_inference"),

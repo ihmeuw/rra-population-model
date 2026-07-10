@@ -79,8 +79,8 @@ BUILT_VERSIONS = {
         provider="microsoft",
         version="v8",
         time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
-        ][1:-1],
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2027), range(1, 5))
+        ][1:-3],
         measures=[
             "density",
             "height",
@@ -114,11 +114,6 @@ for built_version in BUILT_VERSIONS.values():
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
-DATA_PURPOSES = [
-    'training',
-    'inference',
-]
-
 FEATURE_AVERAGE_RADII = [
     100,
     500,
@@ -134,8 +129,13 @@ BUILT_VERSION_TIME_POINTS = sorted(
 
 ALL_TIME_POINTS = sorted(
     set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
-    | {f"{y}q1" for y in range(1975, 2026)}
+    | {f"{y}q1" for y in range(1975, 2027)}
 )
+
+MODELING_TIME_POINTS = [
+    tp for tp in BUILT_VERSION_TIME_POINTS
+    if int(tp.split("q")[0]) >= 2020
+]
 
 
 class CRS(BaseModel):

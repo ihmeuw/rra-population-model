@@ -27,7 +27,8 @@ from rra_tools.shell_tools import mkdir, touch
 GBD2021_RELEASE_ID = 9
 GBD2023_RELEASE_ID = 16
 GBD2025_RELEASE_ID = 34
-FHS_RELEASE_ID = 9
+FHS2021_RELEASE_ID = 9
+FHS2023_RELEASE_ID = 32
 GBD_LOCATION_SET_ID = 22
 FHS_LOCATION_SET_ID = 39
 LSAE_LOCATION_SET_ID = 125
@@ -53,18 +54,25 @@ def load_gbd_populations(location_set_id: int, release_id: int) -> pd.DataFrame:
     )
 
 
-def load_fhs_population(*args: Any, **kwargs: Any) -> pd.DataFrame:
-    pop_fhs_path = f"/mnt/share/forecasting/data/{FHS_RELEASE_ID}/future/population/20250219_draining_fix_old_pop_v5/summary/summary.nc"
+def load_fhs_population(release_id: int) -> pd.DataFrame:
+    if release_id == FHS2021_RELEASE_ID:
+        pop_fhs_path = f"/mnt/share/forecasting/data/{FHS2021_RELEASE_ID}/future/population/20250219_draining_fix_old_pop_v5/summary/summary.nc"
+        scenario = 0
+        column = "value"
+    elif release_id == FHS2023_RELEASE_ID:
+        pop_fhs_path = f"/mnt/share/forecasting/data/{FHS2023_RELEASE_ID}/future/population/future_population_s130v41/summary/summary.nc"
+        scenario = 130
+        column = "draws"
     return (
         xr.open_dataset(pop_fhs_path)
-        .sel(scenario=0, statistic="mean", sex_id=3, age_group_id=22)
+        .sel(scenario=scenario, statistic="mean", sex_id=3, age_group_id=22)
         .to_dataframe()
         .reset_index()
         .drop(columns=["scenario", "sex_id", "age_group_id", "statistic"])
         .set_index(["location_id", "year_id"])
         .sort_index()
         .reset_index()
-        .rename(columns={"value": "population"})
+        .rename(columns={column: "population"})
     )
 
 
@@ -142,7 +150,8 @@ def cache_raking_data(model_root: str) -> None:
         "gbd_2021": (GBD_LOCATION_SET_ID, GBD2021_RELEASE_ID),
         "gbd_2023": (GBD_LOCATION_SET_ID, GBD2023_RELEASE_ID),
         "gbd_2025": (GBD_LOCATION_SET_ID, GBD2025_RELEASE_ID),
-        "fhs_2021": (FHS_LOCATION_SET_ID, FHS_RELEASE_ID),
+        "fhs_2021": (FHS_LOCATION_SET_ID, FHS2021_RELEASE_ID),
+        "fhs_2023": (FHS_LOCATION_SET_ID, FHS2023_RELEASE_ID),
     }
     for name, (location_set_id, release_id) in hierarchy_specs.items():
         print(f"Caching hierarchy for {name}")
@@ -168,7 +177,8 @@ def cache_raking_data(model_root: str) -> None:
         "gbd_2021": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD2021_RELEASE_ID)),
         "gbd_2023": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD2023_RELEASE_ID)),
         "gbd_2025": (load_gbd_populations, (GBD_LOCATION_SET_ID, GBD2025_RELEASE_ID)),
-        "fhs_2021": (load_fhs_population, ()),
+        "fhs_2021": (load_fhs_population, (FHS2021_RELEASE_ID, )),
+        "fhs_2023": (load_fhs_population, (FHS2023_RELEASE_ID, )),
     }
     for name, (loader, args) in pop_loaders.items():
         print(f"Caching population for {name}")

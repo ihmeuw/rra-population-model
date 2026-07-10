@@ -22,30 +22,33 @@ FIELDMAPS_FILES = {
 
 
 def load_data(dataset_name: str, pm_data: PopulationModelData):
-    itu_caribbean = pd.read_csv(ITU_MASKS_ROOT / 'datasets' / 'itu_caribbean.csv')
+    itu_supplement = pd.concat([
+        pd.read_csv(ITU_MASKS_ROOT / 'datasets' / 'itu_caribbean.csv'),
+        pd.read_csv(ITU_MASKS_ROOT / 'datasets' / 'itu_supplement_2026_05_19.csv')
+    ])
 
     data = gpd.read_parquet(ITU_MASKS_ROOT / 'datasets' / FIELDMAPS_FILES[dataset_name])
 
-    data_caribbean = data.loc[data['iso_2'].isin(itu_caribbean['Iso2Code'])]
-    data_caribbean = data_caribbean.loc[
+    data_supplement = data.loc[data['iso_2'].isin(itu_supplement['Iso2Code'])]
+    data_supplement = data_supplement.loc[
         # multiple rows for Jamaica, just keep matching admin0
-        (data_caribbean['iso_2'] != 'JM') | (data_caribbean['adm0_name'] == 'Jamaica')
+        (data_supplement['iso_2'] != 'JM') | (data_supplement['adm0_name'] == 'Jamaica')
     ]
-    data_caribbean = data_caribbean.loc[:, ['adm0_name', 'iso_2', 'iso_3', 'geometry']].dissolve(by=['adm0_name', 'iso_2', 'iso_3'])
+    data_supplement = data_supplement.loc[:, ['adm0_name', 'iso_2', 'iso_3', 'geometry']].dissolve(by=['adm0_name', 'iso_2', 'iso_3'])
 
-    missing = [i for i in itu_caribbean['Iso2Code'] if i not in data_caribbean.index.get_level_values('iso_2')]
+    missing = [i for i in itu_supplement['Iso2Code'] if i not in data_supplement.index.get_level_values('iso_2')]
     if missing:
         raise ValueError(f"Missing the following countries: {','.join(missing)}")
 
     itu_iso3s = pm_data.list_itu_iso3s()
     if "RWA" not in itu_iso3s:
         itu_iso3s += ["RWA"]
-    caribbean_iso3s = data_caribbean.index.get_level_values('iso_3').to_list()
-    itu_iso3s = [i for i in itu_iso3s if i not in caribbean_iso3s]
+    supplement_iso3s = data_supplement.index.get_level_values('iso_3').to_list()
+    itu_iso3s = [i for i in itu_iso3s if i not in supplement_iso3s]
 
     data_other = data.loc[data['iso_3'].isin(itu_iso3s)].loc[:, ['adm0_name', 'iso_2', 'iso_3', 'geometry']].dissolve(by=['adm0_name', 'iso_2', 'iso_3'])
 
-    data = pd.concat([data_other, data_caribbean])
+    data = pd.concat([data_other, data_supplement])
 
     return data
 

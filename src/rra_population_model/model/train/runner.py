@@ -176,7 +176,7 @@ def train(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "320G",
+            "memory": "240G",
             "runtime": "960m",
             "project": "proj_rapidresponse",
         },

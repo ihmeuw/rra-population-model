@@ -46,7 +46,6 @@ def get_training_metadata(
     time_point: str,
     intersecting_admins: gpd.GeoDataFrame,
     pm_data: PopulationModelData,
-    purpose: str,
 ) -> TrainingMetadata:
     try:
         full_shape = intersecting_admins.buffer(0).union_all()
@@ -73,10 +72,7 @@ def get_training_metadata(
 
     denominators = pmc.DENOMINATORS
 
-    if purpose == "inference":
-        features = denominators
-    else:
-        features = pm_data.list_features(resolution, tile_meta.block_key, time_point)
+    features = pm_data.list_features(resolution, tile_meta.block_key, time_point)
 
     return TrainingMetadata(
         tile_meta=tile_meta,

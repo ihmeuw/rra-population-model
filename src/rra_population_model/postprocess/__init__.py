@@ -1,3 +1,7 @@
+from rra_population_model.postprocess.admin_rasters.runner import (
+    admin_rasters,
+    admin_rasters_task,
+)
 from rra_population_model.postprocess.mosaic.runner import (
     mosaic,
     mosaic_task,
@@ -30,6 +34,7 @@ RUNNERS = {
     "rake_itu": rake_itu,
     "mosaic": mosaic,
     "upsample": upsample,
+    "admin_rasters": admin_rasters,
 }
 
 TASK_RUNNERS = {
@@ -39,4 +44,5 @@ TASK_RUNNERS = {
     "rake_itu": rake_itu_task,
     "mosaic": mosaic_task,
     "upsample": upsample_task,
+    "admin_rasters": admin_rasters_task,
 }

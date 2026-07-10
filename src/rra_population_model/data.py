@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import rasterio
 import rasterra as rt
 import shapely
 import yaml
@@ -869,9 +870,33 @@ class PopulationModelData:
         time_point: str,
         census_time_point: str,
         model_spec: "ModelSpecification",
+        bounds: tuple[float, float, float, float] | None = None,
     ) -> rt.RasterArray:
-        path = self.raked_census_path(iso3, time_point, census_time_point, model_spec)
-        return rt.load_raster(path / f"{shape_id}.tif")
+        # A single admin's raster can span a huge, mostly-nodata extent -- tiny on
+        # disk but gigabytes decompressed. Callers that only need a block-sized slice
+        # pass ``bounds`` to cap the read. We first intersect ``bounds`` with the
+        # raster's OWN extent (a cheap header read) so the read is minimal in both
+        # directions: a giant admin is capped at the block slice, and a small admin
+        # reads just its own extent instead of being padded up to the full window
+        # (rt.load_raster reads boundless, which would otherwise inflate every small
+        # admin to block size and blow up dense blocks).
+        path = self.raked_census_path(iso3, time_point, census_time_point, model_spec) / f"{shape_id}.tif"
+        if bounds is not None:
+            with rasterio.open(path) as f:
+                fb = f.bounds
+            overlap = (
+                max(bounds[0], fb.left),
+                max(bounds[1], fb.bottom),
+                min(bounds[2], fb.right),
+                min(bounds[3], fb.top),
+            )
+            if overlap[0] < overlap[2] and overlap[1] < overlap[3]:
+                bounds = overlap
+            # else: no overlap with the raster's data extent (rare -- only a nodata
+            # sliver of the admin reaches the block). Fall through with the original
+            # bounds; the boundless read is all-nodata over the block, which the
+            # caller drops. Rare enough not to bother avoiding the padded read.
+        return rt.load_raster(path, bounds=bounds)
 
     def save_census_raking_metadata(
         self,
@@ -896,15 +921,37 @@ class PopulationModelData:
     def load_census_raking_inputs(
         self,
         model_spec: "ModelSpecification",
+        *,
+        iso3: str | None = None,
+        census_time_point: str | None = None,
+        task_parent_id: str | None = None,
     ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
+        """Load the census-raking task metadata.
+
+        A single parallel task only needs its own row; pass ``iso3`` (and
+        optionally ``census_time_point`` / ``task_parent_id``) to push those down
+        as a read filter and avoid materializing the full ~1.6 GB task_admins
+        parquet. With no filters the whole table is loaded (used by the rake stage,
+        which needs every task_admin intersecting a block).
+        """
         resolution = model_spec.resolution
         version = model_spec.model_version
         root = self.raked_census_root(resolution, version)
+        filters = [
+            (col, "==", val)
+            for col, val in [
+                ("iso3", iso3),
+                ("census_time_point", census_time_point),
+                ("task_parent_id", task_parent_id),
+            ]
+            if val is not None
+        ]
         task_admins = gpd.read_parquet(
-            root / "task_admins.parquet"
+            root / "task_admins.parquet", filters=filters or None
         )
+        weight_filters = [("iso3", "==", iso3)] if iso3 is not None else None
         census_weights = pd.read_parquet(
-            root / "weights.parquet"
+            root / "weights.parquet", filters=weight_filters
         )
         return task_admins, census_weights
 
@@ -924,20 +971,34 @@ class PopulationModelData:
         return self.model_version_root(resolution, version) / "raking_factors"
 
     def raking_factor_path(
-        self, time_point: str, model_spec: "ModelSpecification"
+        self,
+        time_point: str,
+        model_spec: "ModelSpecification",
+        stage: str | None = None,
     ) -> Path:
-        return (
-            self.raking_factors_root(model_spec.resolution, model_spec.model_version)
-            / f"{time_point}.parquet"
-        )
+        # ``stage`` selects the single-write pipeline layout: "initial" (factors
+        # from raw predictions) or "final" (factors from the census-spliced field).
+        # Left as None it reads the legacy top-level layout, where the flat file
+        # holds whichever pass last wrote it -- so old code reading old versions
+        # runs as-is, while code asking for a stage on a pre-stage version fails
+        # loudly instead of silently getting the wrong pass (no fallback).
+        root = self.raking_factors_root(model_spec.resolution, model_spec.model_version)
+        if stage is not None:
+            if stage not in ("initial", "final"):
+                raise ValueError(f"Invalid raking factor stage: {stage}")
+            root = root / stage
+        return root / f"{time_point}.parquet"
 
     def list_raking_factor_time_points(
-        self, resolution: str, version: str
+        self, resolution: str, version: str, stage: str | None = None
     ) -> list[str]:
+        root = self.raking_factors_root(resolution, version)
+        if stage is not None:
+            root = root / stage
         return [
             p.stem
-            for p in self.raking_factors_root(resolution, version).iterdir()
-            if p.is_file()
+            for p in root.iterdir()
+            if p.is_file() and p.suffix == ".parquet"
         ]
 
     def save_raking_factors(
@@ -945,8 +1006,10 @@ class PopulationModelData:
         raking_factors: gpd.GeoDataFrame,
         time_point: str,
         model_spec: "ModelSpecification",
+        stage: str | None = None,
     ) -> None:
-        path = self.raking_factor_path(time_point, model_spec)
+        path = self.raking_factor_path(time_point, model_spec, stage)
+        mkdir(path.parent, parents=True, exist_ok=True)
         touch(path, clobber=True)
         raking_factors.to_parquet(path)
 
@@ -954,9 +1017,11 @@ class PopulationModelData:
         self,
         time_point: str,
         model_spec: "ModelSpecification",
+        *,
+        stage: str | None = None,
         **kwargs: Any,
     ) -> gpd.GeoDataFrame:
-        path = self.raking_factor_path(time_point, model_spec)
+        path = self.raking_factor_path(time_point, model_spec, stage)
         return gpd.read_parquet(path, **kwargs)
 
     def raked_predictions_root(self, resolution: str, version: str) -> Path:
@@ -1003,6 +1068,53 @@ class PopulationModelData:
         path = self.raked_prediction_path(block_key, time_point, model_spec)
         raster = rt.load_raster(path, subset_bounds)
         return raster
+
+    def gbd_raked_predictions_root(self, resolution: str, version: str) -> Path:
+        # On-demand product (raw x initial raking factor, no census splice) used by
+        # the pseudo-OOS validation; the core pipeline never reads it, so a partial
+        # set of time points is fine.
+        return self.model_version_root(resolution, version) / "gbd_raked_predictions"
+
+    def gbd_raked_prediction_path(
+        self, block_key: str, time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        resolution = model_spec.resolution
+        version = model_spec.model_version
+        return (
+            self.gbd_raked_predictions_root(resolution, version)
+            / time_point
+            / f"{block_key}.tif"
+        )
+
+    def list_gbd_raked_prediction_time_points(
+        self, resolution: str, version: str
+    ) -> list[str]:
+        return [
+            p.name
+            for p in self.gbd_raked_predictions_root(resolution, version).iterdir()
+            if p.is_dir()
+        ]
+
+    def save_gbd_raked_prediction(
+        self,
+        raster: rt.RasterArray,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> None:
+        path = self.gbd_raked_prediction_path(block_key, time_point, model_spec)
+        mkdir(path.parent, parents=True, exist_ok=True)
+        save_raster(raster, path)
+
+    def load_gbd_raked_prediction(
+        self,
+        block_key: str,
+        time_point: str,
+        model_spec: "ModelSpecification",
+        subset_bounds: shapely.Polygon | None = None,
+    ) -> rt.RasterArray:
+        path = self.gbd_raked_prediction_path(block_key, time_point, model_spec)
+        return rt.load_raster(path, subset_bounds)
 
     def compiled_predictions_root(self, resolution: str, version: str, measure: str = "") -> Path:
         return self.model_version_root(resolution, version) / "compiled_predictions" / measure
@@ -1137,6 +1249,30 @@ class PopulationModelData:
     @property
     def figure_results(self) -> Path:
         return Path(self.root / "figure_results")
+
+    def country_data_root(self, resolution: str, version: str) -> Path:
+        return self.root / "country_data" / f"{resolution}m" / version
+
+    def country_data_path(
+        self, resolution: str, version: str, ihme_loc_id: str, time_point: str
+    ) -> Path:
+        return (
+            self.country_data_root(resolution, version)
+            / ihme_loc_id
+            / f"{ihme_loc_id}_{time_point}.tif"
+        )
+
+    def save_country_data(
+        self,
+        raster: rt.RasterArray,
+        resolution: str,
+        version: str,
+        ihme_loc_id: str,
+        time_point: str,
+    ) -> None:
+        path = self.country_data_path(resolution, version, ihme_loc_id, time_point)
+        mkdir(path.parent, exist_ok=True, parents=True)
+        save_raster(raster, path)
 
     @property
     def itu(self) -> Path:

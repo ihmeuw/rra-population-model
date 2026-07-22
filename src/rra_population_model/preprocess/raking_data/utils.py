@@ -3,9 +3,11 @@ from __future__ import annotations
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
 
 from rra_population_model.data import PopulationModelData
 from rra_population_model.preprocess.raking_data.metadata import (
+    MERGE_LSAE_SHAPES_INTO_GBD,
     NO_REGION_ID,
     SUPPLEMENT,
     TO_DROP_PARENTS,
@@ -408,7 +410,18 @@ def build_raking_shapes(
     shapes: dict[str, gpd.GeoDataFrame],
     raking_population: pd.DataFrame,
 ) -> gpd.GeoDataFrame:
-    ihme_shapes = shapes["gbd"]
+    ihme_shapes = shapes["gbd"].copy()
+    # Some GBD populations cover territory missing from the GBD polygon
+    # (e.g. Cyprus, whose total includes Northern Cyprus). Union the LSAE
+    # shapes for that territory into the GBD polygon.
+    for parent_id, child_ids in MERGE_LSAE_SHAPES_INTO_GBD.items():
+        parent_mask = ihme_shapes["location_id"] == parent_id
+        children = shapes["lsae"].loc[
+            shapes["lsae"]["location_id"].isin(child_ids), "geometry"
+        ]
+        ihme_shapes.loc[parent_mask, "geometry"] = shapely.unary_union(
+            [ihme_shapes.loc[parent_mask, "geometry"].iloc[0], *children]
+        )
     keep_mask = (
         ihme_shapes["location_id"].isin(raking_population["location_id"])
         # We want LSAE definitions for a few places to resolve definition

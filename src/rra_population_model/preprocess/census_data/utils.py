@@ -17,6 +17,9 @@ def filter_iso3_year_list(
     """Filter out invalid iso3-year combinations from the list."""
     skip_list = [
         ("KEN", "2019"),  # This extraction is not in the right format
+        ("CHN", "2020"),  # No additional depth beyond GBD
+        ("RUS", "2021"),  # No additional depth beyond GBD
+        ("MSR", "2023"),  # No additional depth beyond GBD
     ]
     out_list = []
     for iso3, year in iso3_year_list:

@@ -15,7 +15,7 @@ from shapely.ops import unary_union
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
-STEP_LIMIT = 1.5
+STEP_LIMIT = 1.0025  # 1% per year
 
 ADMIN_EXCLUSIONS = {
     "ARG": [

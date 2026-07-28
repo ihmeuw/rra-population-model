@@ -77,18 +77,38 @@ TO_DROP_PARENTS = [
     72,
 ]
 
-TO_USE_LSAE_SHAPES = [
-    # Spain (92) was formerly swapped to the LSAE shape to remove the Canary
-    # Islands, which were carried as a separate supplemental location (311)
-    # with no population. The Canary Islands are included in GBD's Spain
-    # population, so we now keep the GBD shape, which includes them, 
-    # and no longer supplement 311.
-
-    71,  # Australia, removes Ashmore and Cartier Islands and Coral Sea Islands
-    # Canada and Greenland intersect in the GBD hierarchy, so swap both.
-    101,
-    349,
-]
+# Locations whose GBD polygon is replaced with the LSAE polygon, keyed by the
+# LSAE admin level the location lives at.
+TO_USE_LSAE_SHAPES = {
+    "a0": [
+        # Spain (92) was formerly swapped to the LSAE shape to remove the Canary
+        # Islands, which were carried as a separate supplemental location (311)
+        # with no population. The Canary Islands are included in GBD's Spain
+        # population, so we now keep the GBD shape, which includes them,
+        # and no longer supplement 311.
+        71,  # Australia, removes Ashmore and Cartier Islands and Coral Sea Islands
+        # Canada and Greenland intersect in the GBD hierarchy, so swap both.
+        101,
+        349,
+    ],
+    # The GBD polygons for the nine English regions are crude unions of the
+    # UTLA polygons we received from collaborators: their generalized
+    # coastlines cut off populated coastal areas (e.g. the Severn, Mersey,
+    # and Dee estuaries), which fall outside every raking shape and lose
+    # their population in raking. The LSAE admin-2 shapes carry the same
+    # location ids with detailed coastlines, so use those instead.
+    "a2": [
+        4618,  # North East England
+        4619,  # North West England
+        4620,  # Yorkshire and the Humber
+        4621,  # East Midlands
+        4622,  # West Midlands
+        4623,  # East of England
+        4624,  # Greater London
+        4625,  # South East England
+        4626,  # South West England
+    ],
+}
 
 MERGE_LSAE_SHAPES_INTO_GBD = {
     # Cyprus: GBD's population is for the whole island, but its polygon covers

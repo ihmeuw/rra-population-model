@@ -237,12 +237,19 @@ def raking_factors_main(
         combined["unraked"] = combined["raw"]
     else:
         rf1 = rf_initial.reindex(combined.index)  # type: ignore[union-attr]
-        if rf1.isna().any():
-            missing = combined.index[rf1.isna()].tolist()
+        missing = combined.index.difference(
+            rf_initial.index  # type: ignore[union-attr]
+        ).tolist()
+        if missing:
             raise ValueError(
                 f"No initial raking factor for location_ids {missing}; the initial "
                 "and final stages must be built from the same raking shapes."
             )
+        # A present-but-NaN initial factor is legitimate, not a shape mismatch:
+        # unmodeled supplement locations have NaN target populations and
+        # zero-population locations are 0/0. NaN propagates through the spliced
+        # field to a NaN final factor, which rake renders as the same unmodeled
+        # carve-out (NaN pixels) the initial stage produces.
         # The spliced field: census wherever the census layer has valid data,
         # rf1 * raw elsewhere.
         combined["unraked"] = combined["census"] + rf1 * (

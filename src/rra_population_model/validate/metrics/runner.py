@@ -86,7 +86,7 @@ def pixel_metrics_main(
             bbox=block_poly.bounds,
             filters=[("admin_level", "==", max_admin_level)],
         )
-        gdf = gdf[gdf.buffer(0).intersects(block_poly)]
+        gdf = gdf[gdf.intersects(block_poly)]
         if not gdf.empty:
             iter_data.append((iso3, year, gdf))
 

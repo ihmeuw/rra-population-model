@@ -1,5 +1,7 @@
 import geopandas as gpd
 import pandas as pd
+from shapely.geometry import GeometryCollection, MultiPolygon
+from shapely.ops import unary_union
 
 from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
@@ -122,4 +124,40 @@ def filter_census_columns(census_data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         "geometry",
     ]
     census_data = census_data.loc[:, keep_columns]
+    return census_data
+
+
+def _geometry_collection_to_multipolygon(
+    geom: GeometryCollection | MultiPolygon,
+) -> None | MultiPolygon:
+    if isinstance(geom, GeometryCollection) and not isinstance(geom, MultiPolygon):
+        polygons = [g for g in geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if polygons:
+            return unary_union(polygons)
+        return None
+    return geom
+
+
+def sanitize_geometries(census_data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Source shapefiles arrive with occasional invalid geometries
+    (self-intersections in complex coastal admins: JPN, MEX, KOR, ...), which
+    make downstream geometric predicates raise. Repair once at ingestion so
+    every consumer can assume valid, polygonal geometries: make_valid the
+    invalid rows, then collapse any GeometryCollections it produces (polygons +
+    degenerate line/point slivers) back to MultiPolygons."""
+    invalid = ~census_data["geometry"].is_valid
+    if invalid.any():
+        print(f"Repairing {int(invalid.sum())} invalid geometries")
+        census_data.loc[invalid, "geometry"] = census_data.loc[
+            invalid, "geometry"
+        ].make_valid()
+    collections = census_data["geometry"].apply(
+        lambda g: isinstance(g, GeometryCollection)
+    )
+    if collections.any():
+        census_data.loc[collections, "geometry"] = census_data.loc[
+            collections, "geometry"
+        ].apply(_geometry_collection_to_multipolygon)
+    if census_data["geometry"].isna().any() or not census_data["geometry"].is_valid.all():
+        raise ValueError("Invalid geometries remain after repair")
     return census_data

@@ -1,5 +1,6 @@
 import click
 import numpy as np
+import pandas as pd
 import rasterra as rt
 from rasterra._features import raster_geometry_mask
 from rra_tools import jobmon
@@ -13,7 +14,6 @@ from rra_population_model.postprocess.utils import (
     block_census_tasks,
     get_prediction_time_point,
     load_block_census_layer,
-    repair_invalid_geometries,
 )
 
 STAGES = ["final", "gbd"]
@@ -103,7 +103,6 @@ def rake_main(
             block_geometry = model_frame.union_all()
 
             task_admins, census_weights = pm_data.load_census_raking_inputs(model_spec)
-            task_admins = repair_invalid_geometries(task_admins)
             census_layer = load_block_census_layer(
                 pm_data,
                 model_spec,
@@ -179,6 +178,13 @@ def rake_task(
 @clio.with_version()
 @click.option("--stage", type=click.Choice(STAGES), required=True)
 @click.option("--census", type=bool, default=True, show_default=True)
+@click.option(
+    "--q1-only",
+    is_flag=True,
+    help="Subset to q1 time points. Validation products only: the gbd stage is "
+    "partial by design and validate.metrics reads only q1, but the final stage "
+    "must be complete.",
+)
 @clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
@@ -187,6 +193,7 @@ def rake(
     version: str,
     stage: str,
     census: bool,
+    q1_only: bool,
     time_point: str,
     output_dir: str,
     queue: str,
@@ -194,6 +201,8 @@ def rake(
     pm_data = PopulationModelData(output_dir)
     if stage == "gbd" and not census:
         raise ValueError("--census False only applies to --stage final.")
+    if q1_only and stage == "final":
+        raise ValueError("--q1-only is for validation products; the final stage must be complete.")
 
     # Fail fast on missing raking factors rather than mid-workflow.
     rf_time_points = set(
@@ -205,27 +214,40 @@ def rake(
             pm_data.list_raking_factor_time_points(resolution, version, stage="final")
         )
     time_points = clio.convert_choice(time_point, sorted(rf_time_points))
+    if q1_only:
+        time_points = [tp for tp in time_points if tp.endswith("q1")]
 
     model_frame = pm_data.load_modeling_frame(resolution)
     block_keys = model_frame.block_key.unique().tolist()
 
+    rf_blocks: dict[str, set[str]] = {}
+    if splicing:
+        # Blocks with raking factors at a time point build the census splice
+        # (global task_admins load + geometry repair, ~10.5 GiB / ~12 min
+        # measured); blocks without factors just write a nodata raster
+        # (~2 GiB / <2 min). Tier the asks accordingly.
+        model_spec = pm_data.load_model_specification(resolution, version)
+        rf_blocks = {
+            tp: set(
+                pd.read_parquet(
+                    pm_data.raking_factor_path(tp, model_spec, stage="initial"),
+                    columns=["block_key"],
+                )["block_key"]
+            )
+            for tp in time_points
+        }
+
+    task_resources: dict[str, str | int]
+    rf_task_resources: dict[str, str | int]
     if resolution == "40":
-        if splicing:
-            task_resources = {
-                "queue": queue,
-                "cores": 1,
-                "memory": "9G",
-                "runtime": "9m",
-                "project": "proj_rapidresponse",
-            }
-        else:
-            task_resources = {
-                "queue": queue,
-                "cores": 1,
-                "memory": "4G",
-                "runtime": "4m",
-                "project": "proj_rapidresponse",
-            }
+        task_resources = {
+            "queue": queue,
+            "cores": 1,
+            "memory": "4G",
+            "runtime": "4m",
+            "project": "proj_rapidresponse",
+        }
+        rf_task_resources = task_resources | {"memory": "16G", "runtime": "24m"}
     elif resolution == "100":
         task_resources = {
             "queue": queue,
@@ -234,23 +256,47 @@ def rake(
             "runtime": "6m",
             "project": "proj_rapidresponse",
         }
+        rf_task_resources = task_resources
 
     print(f"Raking {len(block_keys) * len(time_points)} blocks")
-    jobmon.run_parallel(
-        runner="pmtask postprocess",
-        task_name="rake",
-        task_resources=task_resources,
-        node_args={
-            "block-key": block_keys,
-            "time-point": time_points,
-        },
-        task_args={
-            "version": version,
-            "resolution": resolution,
-            "output-dir": output_dir,
-            "stage": stage,
-            "census": census,
-        },
-        max_attempts=3,
-        log_root=pm_data.log_dir("postprocess_rake"),
-    )
+    if splicing:
+        tasks = [(bk, tp) for bk in block_keys for tp in time_points]
+        jobmon.run_parallel(
+            runner="pmtask postprocess",
+            task_name="rake",
+            task_resources=task_resources,
+            flat_node_args=(("block-key", "time-point"), tasks),
+            per_task_resources=lambda args: (
+                rf_task_resources if args[0] in rf_blocks[args[1]] else task_resources
+            ),
+            task_args={
+                "version": version,
+                "resolution": resolution,
+                "output-dir": output_dir,
+                "stage": stage,
+                "census": census,
+            },
+            max_attempts=3,
+            log_root=pm_data.log_dir("postprocess_rake"),
+            concurrency_limit=1_000,
+        )
+    else:
+        jobmon.run_parallel(
+            runner="pmtask postprocess",
+            task_name="rake",
+            task_resources=task_resources,
+            node_args={
+                "block-key": block_keys,
+                "time-point": time_points,
+            },
+            task_args={
+                "version": version,
+                "resolution": resolution,
+                "output-dir": output_dir,
+                "stage": stage,
+                "census": census,
+            },
+            max_attempts=3,
+            log_root=pm_data.log_dir("postprocess_rake"),
+            concurrency_limit=1_000,
+        )

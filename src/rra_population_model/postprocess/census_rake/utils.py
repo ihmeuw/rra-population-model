@@ -9,8 +9,6 @@ import rasterra as rt
 from affine import Affine
 from rasterio import features
 from shapely import area, box, intersection, set_precision
-from shapely.geometry import GeometryCollection, MultiPolygon
-from shapely.ops import unary_union
 
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
@@ -244,15 +242,6 @@ def trim_null_edges(
     )
 
 
-def geometry_collection_to_multipolygon(geom: GeometryCollection | MultiPolygon) -> None | MultiPolygon:
-    if isinstance(geom, GeometryCollection) and not isinstance(geom, MultiPolygon):
-        polygons = [g for g in geom.geoms if g.geom_type in ('Polygon', 'MultiPolygon')]
-        if polygons:
-            return unary_union(polygons)
-        return None
-    return geom
-
-
 def process_census_data(
     resolution: str,
     version: str,
@@ -345,13 +334,6 @@ def process_census_data(
         census_data = census_data.loc[:, ["shape_id", "population_total", "geometry"]]
         census_data = census_data.to_crs(modeling_frame.crs)
 
-        invalid_admins = ~census_data["geometry"].is_valid
-        if invalid_admins.any():
-            census_data.loc[invalid_admins, "geometry"] = census_data.loc[invalid_admins, "geometry"].make_valid()
-        if census_data["geometry"].apply(lambda x: isinstance(x, GeometryCollection)).any():
-            census_data["geometry"] = census_data["geometry"].apply(geometry_collection_to_multipolygon)
-        if not census_data["geometry"].is_valid.all():
-            raise ValueError("Invalid admins remain")
         census_data["geometry"] = census_data["geometry"].map(lambda g: set_precision(g, 0.01))
 
         # Only the covered pixels (interior + border of the census shapes, minus

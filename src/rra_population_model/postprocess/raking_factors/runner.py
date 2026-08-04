@@ -19,7 +19,6 @@ from rra_population_model.postprocess.utils import (
     get_prediction_time_point,
     load_block_census_layer,
     paste_on_canvas,
-    repair_invalid_geometries,
 )
 
 RAKING_VERSION = "gbd_2023"
@@ -184,7 +183,6 @@ def raking_factors_main(
             .set_index("location_id")["raking_factor"]
         )
         task_admins, census_weights = pm_data.load_census_raking_inputs(model_spec)
-        task_admins = repair_invalid_geometries(task_admins)
 
     print("Building location aggregation args")
     block_keys = model_frame.block_key.unique().tolist()
@@ -344,6 +342,12 @@ def raking_factors_task(
 @clio.with_time_point(choices=None, allow_all=True)
 @click.option("--extrapolate", is_flag=True)
 @click.option("--stage", type=click.Choice(STAGES), required=True)
+@click.option(
+    "--q1-only",
+    is_flag=True,
+    help="Subset to q1 time points. Validation-only versions: any version that "
+    "produces final outputs needs initial factors at every time point.",
+)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(default=8)
 @clio.with_queue()
@@ -354,10 +358,16 @@ def raking_factors(
     time_point: str,
     extrapolate: bool,
     stage: str,
+    q1_only: bool,
     output_dir: str,
     num_cores: int,
     queue: str,
 ) -> None:
+    if q1_only and stage == "final":
+        raise ValueError(
+            "--q1-only is for validation-only versions; the final stage exists "
+            "solely to serve the (complete) final rake."
+        )
     pm_data = PopulationModelData(output_dir)
     pm_data.maybe_copy_version(resolution, version, copy_from_version)
 
@@ -368,6 +378,8 @@ def raking_factors(
     if extrapolate:
         full_time_series = [f"{y}q1" for y in range(1950, 2101)]
         time_points = sorted(set(time_points) | set(full_time_series))
+    if q1_only:
+        time_points = [tp for tp in time_points if tp.endswith("q1")]
 
     if stage == "final":
         # Fail fast on missing inputs rather than mid-workflow: the final stage

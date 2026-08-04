@@ -35,16 +35,6 @@ def check_gdal_installed() -> None:
         raise ValueError(msg)
 
 
-def repair_invalid_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Make invalid geometries valid in place (task_admins stores raw parent
-    geometries -- census_rake only repairs the child census geometries -- and an
-    invalid geometry makes ``.intersects`` raise a GEOSException)."""
-    invalid = ~gdf.geometry.is_valid
-    if invalid.any():
-        gdf.loc[invalid, "geometry"] = gdf.loc[invalid, "geometry"].make_valid()
-    return gdf
-
-
 def block_census_tasks(
     task_admins: gpd.GeoDataFrame,
     block_geometry: shapely.Polygon | shapely.MultiPolygon,
@@ -52,10 +42,11 @@ def block_census_tasks(
     """(iso3, task_parent_id, census_time_point) of census admins touching a block.
 
     Uses the spatial index (this gets called once per block over ~17k admins with
-    complex country geometries). Geometries must already be valid (see
-    ``repair_invalid_geometries``) or the intersects predicate can raise a
-    GEOSException. Returned as plain tuples so callers can ship them to worker
-    processes without pickling the admin geometries.
+    complex country geometries). Geometries are valid by construction -- census
+    data is sanitized at ingestion (preprocess.census_data) -- which the
+    intersects predicate requires (invalid geometries raise a GEOSException).
+    Returned as plain tuples so callers can ship them to worker processes
+    without pickling the admin geometries.
     """
     idx = task_admins.sindex.query(block_geometry, predicate="intersects")
     return list(

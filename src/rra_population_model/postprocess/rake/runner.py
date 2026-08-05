@@ -244,10 +244,10 @@ def rake(
             "queue": queue,
             "cores": 1,
             "memory": "4G",
-            "runtime": "4m",
+            "runtime": "3m",
             "project": "proj_rapidresponse",
         }
-        rf_task_resources = task_resources | {"memory": "16G", "runtime": "24m"}
+        rf_task_resources = task_resources | {"memory": "12G", "runtime": "6m"}
     elif resolution == "100":
         task_resources = {
             "queue": queue,

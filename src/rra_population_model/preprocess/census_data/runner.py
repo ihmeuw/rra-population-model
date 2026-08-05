@@ -69,7 +69,7 @@ def census_data(
             "queue": queue,
             "cores": 1,
             "memory": "75G",
-            "runtime": "30m",
+            "runtime": "180m",
             "project": "proj_rapidresponse",
         },
         max_attempts=1,

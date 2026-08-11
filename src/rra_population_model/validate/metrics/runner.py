@@ -1,9 +1,11 @@
 import click
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import rasterra as rt
 import shapely
+from affine import Affine
 from rasterio.features import MergeAlg, rasterize
 from rra_tools import jobmon
 
@@ -11,11 +13,58 @@ from rra_population_model import cli_options as clio
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
+# Coverage-weighted attribution: each pixel is split into SUPERSAMPLE^2 subcells
+# and its population divided uniformly among them, so a boundary pixel is shared
+# between shapes in proportion to (quantized) covered area -- the same
+# attribution the census raking uses -- instead of winner-takes-all at the pixel
+# center, which smears fine admin units (at 40m, most pixels of a US block or
+# UK output area ARE boundary pixels). 4x -> 1/16-pixel area quantization, well
+# below the irreducible noise floor from pixel-value blending.
+SUPERSAMPLE = 4
+# Coarse rows per bincount band: bounds the transient float64 weights copy so
+# peak memory stays ~ the supersampled uint32 mask.
+CHUNK_ROWS = 256
+
+
+def coverage_weighted_sums(
+    pop_raster: rt.RasterArray,
+    shape_values: list[tuple[shapely.Polygon | shapely.MultiPolygon, int]],
+    n_shapes: int,
+) -> npt.NDArray[np.float64]:
+    """Per-shape population sums with partial-pixel (area) attribution."""
+    s = SUPERSAMPLE
+    height, width = pop_raster.shape
+    mask = rasterize(
+        shape_values,
+        out_shape=(height * s, width * s),
+        transform=pop_raster.transform * Affine.scale(1 / s),
+        merge_alg=MergeAlg.replace,
+        dtype=np.uint32,
+    )
+    pop_arr = pop_raster._ndarray  # noqa: SLF001
+    sums = np.zeros(n_shapes + 1)
+    for r0 in range(0, height, CHUNK_ROWS):
+        r1 = min(height, r0 + CHUNK_ROWS)
+        weights = (
+            np.repeat(
+                np.repeat(np.nan_to_num(pop_arr[r0:r1], nan=0.0), s, axis=0), s, axis=1
+            )
+            / (s * s)
+        )
+        sums += np.bincount(
+            mask[r0 * s : r1 * s].ravel(),
+            weights=weights.ravel(),
+            minlength=n_shapes + 1,
+        )
+    return sums[1:]
+
 
 def build_bounds_map(
     raster_template: rt.RasterArray,
     shape_values: list[tuple[shapely.Polygon | shapely.MultiPolygon, int]],
 ) -> dict[int, tuple[slice, slice]]:
+    # Still used by validate.comparison (center-point attribution); the metrics
+    # stage itself uses coverage_weighted_sums above.
     # The tranform maps pixel coordinates to the CRS coordinates.
     # This mask is the inverse of that transform.
     to_pixel = ~raster_template.transform
@@ -72,7 +121,6 @@ def pixel_metrics_main(
     # with `rake --stage gbd` first.
     model_spec = pm_data.load_model_specification(resolution, version)
     pop_raster = pm_data.load_gbd_raked_prediction(block_key, time_point, model_spec)
-    pop_arr = pop_raster._ndarray  # noqa: SLF001
 
     print("Loading and subsetting census data")
     iter_data = []
@@ -98,24 +146,7 @@ def pixel_metrics_main(
     out = []
     for iso3, year, gdf in iter_data:
         shape_values = [(shape, i + 1) for i, shape in enumerate(gdf.geometry)]
-        bounds_map = build_bounds_map(pop_raster, shape_values)
-
-        location_mask = np.zeros_like(pop_raster, dtype=np.uint32)
-        location_mask = rasterize(
-            shape_values,
-            out=location_mask,
-            transform=pop_raster.transform,
-            merge_alg=MergeAlg.replace,
-        )
-        final_bounds_map = {
-            i - 1: (rows, cols, location_mask[rows, cols] == i)
-            for i, (rows, cols) in bounds_map.items()
-        }
-
-        data = []
-        for rows, cols, mask in final_bounds_map.values():
-            loc_pop = np.nansum(pop_arr[rows, cols][mask])
-            data.append(loc_pop)
+        data = coverage_weighted_sums(pop_raster, shape_values, len(gdf))
 
         loc_results = gdf[["shape_id"]].copy()
         loc_results["iso3"] = iso3
@@ -200,4 +231,5 @@ def metrics(
         },
         max_attempts=3,
         log_root=pm_data.log_dir("validate_pixel_metrics"),
+        concurrency_limit=1_000,
     )

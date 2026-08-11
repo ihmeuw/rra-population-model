@@ -33,7 +33,7 @@ NO_REGION_ID = -1
 TO_DROP_PARENTS = [
     # Drop UK UTLAs from these regions
     4618,
-    4919,
+    4619,
     4620,
     4621,
     4622,
@@ -77,13 +77,49 @@ TO_DROP_PARENTS = [
     72,
 ]
 
-TO_USE_LSAE_SHAPES = [
-    92,  # Spain, removes Canary Islands
-    71,  # Australia, removes Ashmore and Cartier Islands and Coral Sea Islands
-    # Canada and Greenland intersect in the GBD hierarchy, so swap both.
-    101,
-    349,
-]
+# Locations whose GBD polygon is replaced with the LSAE polygon, keyed by the
+# LSAE admin level the location lives at.
+TO_USE_LSAE_SHAPES = {
+    "a0": [
+        # Spain (92) was formerly swapped to the LSAE shape to remove the Canary
+        # Islands, which were carried as a separate supplemental location (311)
+        # with no population. The Canary Islands are included in GBD's Spain
+        # population, so we now keep the GBD shape, which includes them,
+        # and no longer supplement 311.
+        71,  # Australia, removes Ashmore and Cartier Islands and Coral Sea Islands
+        # Canada and Greenland intersect in the GBD hierarchy, so swap both.
+        101,
+        349,
+    ],
+    # The GBD polygons for the nine English regions are crude unions of the
+    # UTLA polygons we received from collaborators: their generalized
+    # coastlines cut off populated coastal areas (e.g. the Severn, Mersey,
+    # and Dee estuaries), which fall outside every raking shape and lose
+    # their population in raking. The LSAE admin-2 shapes carry the same
+    # location ids with detailed coastlines, so use those instead.
+    "a2": [
+        4618,  # North East England
+        4619,  # North West England
+        4620,  # Yorkshire and the Humber
+        4621,  # East Midlands
+        4622,  # West Midlands
+        4623,  # East of England
+        4624,  # Greater London
+        4625,  # South East England
+        4626,  # South West England
+    ],
+}
+
+MERGE_LSAE_SHAPES_INTO_GBD = {
+    # Cyprus: GBD's population is for the whole island, but its polygon covers
+    # only the area south of the Green Line. Union in the LSAE shapes for these
+    # territories (formerly separate no-population supplemental locations) so
+    # the population lands on the full territory it represents.
+    77: [
+        53483,  # Turkish Republic of Northern Cyprus
+        296,  # Akrotiri and Dhekelia
+    ],
+}
 
 
 class SUPPLEMENT:
@@ -207,13 +243,11 @@ def load_supplmental_metadata(gbd_version: str) -> pd.DataFrame:
             # These locations are present in the IHME mapping file:
             # /home/j/DATA/IHME_COUNTRY_CODES/IHME_COUNTRY_CODES_Y2013M07D26.CSV
             # despite the fact that they do not have wpp estimates.
-            (
-                296,
-                "Akrotiri and Dhekelia",
-                WESTERN_EUROPE,
-                NO_ISO_CODE,
-                SUPPLEMENT.UNMODELED,
-            ),
+            # Akrotiri and Dhekelia (296) was removed from this list: the UK
+            # base areas' residents are included in GBD's whole-island Cyprus
+            # population, so its shape is unioned into Cyprus (77) via
+            # MERGE_LSAE_SHAPES_INTO_GBD instead of carrying its own NaN
+            # population (which left a NaN hole in the raked outputs).
             (297, "Aland Islands", WESTERN_EUROPE, "ALA", SUPPLEMENT.UNMODELED),
             (318, "Christmas Island", SOUTHEAST_ASIA, "CXR", SUPPLEMENT.UNMODELED),
             (
@@ -234,15 +268,15 @@ def load_supplmental_metadata(gbd_version: str) -> pd.DataFrame:
             ),
             #
             # LOCATION GROUP TWO: Unmapped
-            # These locations are missing from the IHME mapping file
-            (
-                53483,
-                "Turkish Republic of Northern Cyprus",
-                WESTERN_EUROPE,
-                NO_ISO_CODE,
-                SUPPLEMENT.UNMODELED,
-            ),
-            (311, "Canary Islands", WESTERN_EUROPE, "XCA", SUPPLEMENT.UNMODELED),
+            # These locations are missing from the IHME mapping file.
+            # This group formerly held Northern Cyprus (53483) and the Canary
+            # Islands (311). Both were removed: their people are already
+            # counted in the GBD populations of Cyprus (77) and Spain (92)
+            # respectively, so carrying them as separate NaN-population
+            # locations left NaN holes in the raked outputs. Northern Cyprus's
+            # shape is unioned into Cyprus via MERGE_LSAE_SHAPES_INTO_GBD, and
+            # Spain now uses the GBD shape, which includes the Canary Islands
+            # (see TO_USE_LSAE_SHAPES).
             #
             # CATEGORY THREE: `zero_population`
             # The locations are not present in either WPP or GBD, but I have been able to

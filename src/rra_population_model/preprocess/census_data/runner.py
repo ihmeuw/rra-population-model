@@ -21,6 +21,7 @@ def census_data_main(
     census_shapes = utils.load_census_shapes(pop_data, iso3, year)
     census_data = utils.merge_census(census_counts, census_shapes)
     census_data = utils.filter_census_columns(census_data)
+    census_data = utils.sanitize_geometries(census_data)
 
     # Save to output directory
     print(f"Saving census data for {iso3} {year}")
@@ -68,7 +69,7 @@ def census_data(
             "queue": queue,
             "cores": 1,
             "memory": "75G",
-            "runtime": "30m",
+            "runtime": "180m",
             "project": "proj_rapidresponse",
         },
         max_attempts=1,

@@ -106,6 +106,20 @@ def with_ntl_option[**P, T](
     )
 
 
+def with_ga_option[**P, T](
+    *,
+    allow_all: bool = False,
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    return with_choice(
+        "ga_option",
+        "g",
+        allow_all=allow_all,
+        choices=["none", "all"] + [f"{far}m" for far in pmc.FEATURE_AVERAGE_RADII],
+        help="Geospatial averages of building data to include.",
+        convert=allow_all,
+    )
+
+
 def with_version[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--version",
@@ -134,6 +148,16 @@ def with_block_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     )
 
 
+def with_location_id[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
+    return click.option(
+        "--location-id",
+        "-l",
+        type=click.INT,
+        required=True,
+        help="GBD location ID to run.",
+    )
+
+
 def with_tile_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
     return click.option(
         "--tile-key",
@@ -154,6 +178,7 @@ __all__ = [
     "with_dry_run",
     "with_input_directory",
     "with_iso3",
+    "with_location_id",
     "with_num_cores",
     "with_output_directory",
     "with_overwrite",

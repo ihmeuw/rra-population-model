@@ -17,12 +17,18 @@ from rra_population_model.model_prep.features.ntl import process_ntl
 from rra_population_model.model_prep.features.overture import process_overture
 
 # GHSL first, as we need the residential mask for msft
-BUILT_VERSIONS = [
-    pmc.BUILT_VERSIONS["ghsl_r2023a"],
-    pmc.BUILT_VERSIONS["microsoft_v6"],
-    pmc.BUILT_VERSIONS["microsoft_v7"],
-    pmc.BUILT_VERSIONS["microsoft_v7_1"],
-]
+BUILT_VERSIONS = {
+    '40': [
+        pmc.BUILT_VERSIONS["ghsl_r2023a"],
+        # pmc.BUILT_VERSIONS["microsoft_v7_1"],
+        pmc.BUILT_VERSIONS["microsoft_v8"],
+    ],
+    '100': [
+        pmc.BUILT_VERSIONS["ghsl_r2023a"],
+        # pmc.BUILT_VERSIONS["microsoft_v7_1"],
+        pmc.BUILT_VERSIONS["microsoft_v8"],
+    ],
+}
 
 
 def features_main(
@@ -30,18 +36,18 @@ def features_main(
     time_point: str,
     resolution: str,
     building_density_dir: str | Path,
-    model_root: str | Path,
+    output_dir: str | Path,
 ) -> None:
     print(f"Processing features for block {block_key} at time {time_point}")
     bd_data = BuildingDensityData(building_density_dir)
-    pm_data = PopulationModelData(model_root)
+    pm_data = PopulationModelData(output_dir)
 
     print("Loading all feature metadata")
     feature_metadata = get_feature_metadata(
         pm_data, bd_data, resolution, block_key, time_point
     )
 
-    for built_version in BUILT_VERSIONS:
+    for built_version in BUILT_VERSIONS[resolution]:
         print(f"Processing {built_version.name}")
         strategy, fill_time_points = get_processing_strategy(
             built_version, feature_metadata
@@ -73,11 +79,11 @@ def geospatial_average_features_main(
     time_point: str,
     resolution: str,
     building_density_dir: str | Path,
-    model_root: str | Path,
+    output_dir: str | Path,
 ) -> None:
     print(f"Processing features for block {block_key} at time {time_point}")
     bd_data = BuildingDensityData(building_density_dir)
-    pm_data = PopulationModelData(model_root)
+    pm_data = PopulationModelData(output_dir)
 
     print("Loading all feature metadata")
     feature_metadata = get_feature_metadata(
@@ -86,18 +92,19 @@ def geospatial_average_features_main(
     features_to_average = [
         "density",
         "volume",
-        "nonresidential_density",
-        "nonresidential_volume",
-        "residential_density",
+        # "nonresidential_density",
+        # "nonresidential_volume",
+        # "residential_density",
         "residential_volume",
     ]
-    for built_version in BUILT_VERSIONS:
+    for built_version in BUILT_VERSIONS[resolution]:
         print(f"Processing {built_version.name}")
         strategy, fill_time_points = get_processing_strategy(
             built_version, feature_metadata
         )
+        built_version_features = [f"{built_version.name}_{feature}" for feature in features_to_average]
         feature_paths = strategy.generate_geospatial_averages(
-            [f"{built_version.name}_{feature}" for feature in features_to_average],
+            built_version_features,
             pmc.FEATURE_AVERAGE_RADII,
             pm_data,
         )
@@ -166,9 +173,83 @@ def features(
     njobs = len(block_keys) * len(time_point)
     print(f"Submitting {njobs} jobs to process features")
 
+    if "2020q2" in time_point:
+        # jobs that do overture processing need more resources
+        jobmon.run_parallel(
+            runner="pmtask model_prep",
+            task_name="features",
+            node_args={
+                "block-key": block_keys,
+                "time-point": ["2020q2"],
+            },
+            task_args={
+                "building-density-dir": building_density_dir,
+                "output-dir": output_dir,
+                "resolution": resolution,
+            },
+            task_resources={
+                "queue": queue,
+                "cores": 1,
+                "memory": "66G",
+                "runtime": "120m",
+                "project": "proj_rapidresponse",
+                "constraints": "archive",
+            },
+            log_root=pm_data.log_dir("preprocess_features"),
+            max_attempts=3,
+        )
+    time_point_excl = [tp for tp in time_point if tp != "2020q2"]
+    if time_point_excl:
+        jobmon.run_parallel(
+            runner="pmtask model_prep",
+            task_name="features",
+            node_args={
+                "block-key": block_keys,
+                "time-point": time_point_excl,
+            },
+            task_args={
+                "building-density-dir": building_density_dir,
+                "output-dir": output_dir,
+                "resolution": resolution,
+            },
+            task_resources={
+                "queue": queue,
+                "cores": 1,
+                "memory": "6G",
+                "runtime": "6m",
+                "project": "proj_rapidresponse",
+                "constraints": "archive",
+            },
+            log_root=pm_data.log_dir("preprocess_features"),
+            max_attempts=3,
+        )
+
+
+@click.command()
+@clio.with_time_point(allow_all=True)
+@clio.with_resolution()
+@clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
+@clio.with_output_directory(pmc.MODEL_ROOT)
+@clio.with_queue()
+def geospatial_average_features(
+    time_point: list[str],
+    resolution: str,
+    building_density_dir: str,
+    output_dir: str,
+    queue: str,
+) -> None:
+    """Prepare model geospatial average features."""
+    pm_data = PopulationModelData(output_dir)
+    print("Loading the modeling frame")
+    modeling_frame = pm_data.load_modeling_frame(resolution)
+    block_keys = modeling_frame.block_key.unique().tolist()
+
+    njobs = len(block_keys) * len(time_point)
+    print(f"Submitting {njobs} jobs to process geospatial average features")
+
     jobmon.run_parallel(
         runner="pmtask model_prep",
-        task_name="features",
+        task_name="geospatial_average_features",
         node_args={
             "block-key": block_keys,
             "time-point": time_point,
@@ -181,11 +262,11 @@ def features(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "5G",
-            "runtime": "10m",
+            "memory": "20G",
+            "runtime": "20m",
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },
-        log_root=pm_data.log_dir("preprocess_features"),
-        max_attempts=3,
+        log_root=pm_data.log_dir("preprocess_geospatial_average_features"),
+        max_attempts=2,
     )

@@ -6,6 +6,7 @@ license = "BSD-3-Clause"
 readme = "README.md"
 authors = [
     {name = "James Collins", email = "collijk@uw.edu"},
+    {name = "Ryan Barber", email = "rmbarber@uw.edu"},
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -13,10 +14,12 @@ dependencies = [
     "geopandas>=1.0.1",
     "numpy>=2.2.1",
     "pandas>=2.2.3",
-    "rasterra>=0.6.2",
+    "rasterra==0.6.2",
+    # "rasterra (>=0.6.3,<0.7.0)",
+    "matplotlib>=3.10.1",
     "shapely>=2.0.6",
     "pydantic>=2.10.4",
-    "rra-tools>=1.0.25",
+    "rra-tools>=1.0.28",
     "pyyaml>=6.0.2",
     "scikit-learn>=1.6.0",
     "pyarrow>=18.1.0",
@@ -27,6 +30,10 @@ dependencies = [
     "contextily>=1.6.2",
     "xarray>=2025.7.0",
     "netCDF4>=1.7.2",
+    "modrover @ git+https://github.com/ihmeuw-msca/modrover.git",
+    "rasterstats>=0.20.0",
+    "rioxarray>=0.20.0",
+    "lxml>=6.0.2",
 ]
 
 [project.urls]

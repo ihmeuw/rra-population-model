@@ -84,7 +84,10 @@ venv.bak/
 # Jupyter scratch space
 /notebooks
 
+*.claude/
+
 *core
 
 # VS Code Settings
 .vscode/
+.claude/

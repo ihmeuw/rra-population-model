@@ -3,9 +3,11 @@ from __future__ import annotations
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
 
 from rra_population_model.data import PopulationModelData
 from rra_population_model.preprocess.raking_data.metadata import (
+    MERGE_LSAE_SHAPES_INTO_GBD,
     NO_REGION_ID,
     SUPPLEMENT,
     TO_DROP_PARENTS,
@@ -68,7 +70,7 @@ def load_ihme_populations(
     populations = {
         "gbd": pm_data.load_gbd_raking_input("population", f"gbd_{gbd_version}"),
     }
-    if gbd_version == "2021":
+    if gbd_version in ["2021", "2023"]:
         populations["fhs"] = pm_data.load_gbd_raking_input(
             "population", f"fhs_{gbd_version}"
         )
@@ -81,7 +83,7 @@ def load_hierarchies(
     hierarchies = {
         "gbd": pm_data.load_gbd_raking_input("hierarchy", f"gbd_{gbd_version}"),
     }
-    if gbd_version == "2021":
+    if gbd_version in ["2021", "2023"]:
         hierarchies["fhs"] = pm_data.load_gbd_raking_input(
             "hierarchy", f"fhs_{gbd_version}"
         )
@@ -106,6 +108,17 @@ def load_shapes(
         "gbd": pm_data.load_gbd_raking_input("shapes", f"gbd_{gbd_version}"),
         "lsae": pm_data.load_gbd_raking_input("shapes", "lsae_1285_a0"),
     }
+    # The a0 layer backfills every supplemental location; deeper LSAE levels
+    # are only needed for the specific locations swapped at those levels.
+    for level, location_ids in TO_USE_LSAE_SHAPES.items():
+        if level == "a0":
+            continue
+        extra = pm_data.load_gbd_raking_input(
+            "shapes",
+            f"lsae_1285_{level}",
+            filters=[("location_id", "in", location_ids)],
+        )
+        shapes["lsae"] = pd.concat([shapes["lsae"], extra], ignore_index=True)
     if gbd_version == "2023":
         h = pm_data.load_gbd_raking_input("hierarchy", "gbd_2023")
         to_drop = ~shapes["gbd"].location_id.isin(h.location_id)
@@ -408,12 +421,24 @@ def build_raking_shapes(
     shapes: dict[str, gpd.GeoDataFrame],
     raking_population: pd.DataFrame,
 ) -> gpd.GeoDataFrame:
-    ihme_shapes = shapes["gbd"]
+    ihme_shapes = shapes["gbd"].copy()
+    # Some GBD populations cover territory missing from the GBD polygon
+    # (e.g. Cyprus, whose total includes Northern Cyprus). Union the LSAE
+    # shapes for that territory into the GBD polygon.
+    for parent_id, child_ids in MERGE_LSAE_SHAPES_INTO_GBD.items():
+        parent_mask = ihme_shapes["location_id"] == parent_id
+        children = shapes["lsae"].loc[
+            shapes["lsae"]["location_id"].isin(child_ids), "geometry"
+        ]
+        ihme_shapes.loc[parent_mask, "geometry"] = shapely.unary_union(
+            [ihme_shapes.loc[parent_mask, "geometry"].iloc[0], *children]
+        )
+    to_use_lsae = [lid for lids in TO_USE_LSAE_SHAPES.values() for lid in lids]
     keep_mask = (
         ihme_shapes["location_id"].isin(raking_population["location_id"])
         # We want LSAE definitions for a few places to resolve definition
         # issues and some overlaps in the GBD hierarchy.
-        & ~ihme_shapes["location_id"].isin(TO_USE_LSAE_SHAPES)
+        & ~ihme_shapes["location_id"].isin(to_use_lsae)
     )
     ihme_shapes = ihme_shapes.loc[keep_mask]
 

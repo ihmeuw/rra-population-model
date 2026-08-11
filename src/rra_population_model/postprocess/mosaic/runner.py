@@ -147,7 +147,7 @@ def mosaic(
                 "queue": queue,
                 "cores": num_cores,
                 "memory": "160G",
-                "runtime": "20m",
+                "runtime": "24m",
                 "project": "proj_rapidresponse",
             }
         elif resolution == "100":
@@ -155,7 +155,7 @@ def mosaic(
                 "queue": queue,
                 "cores": num_cores,
                 "memory": "120G",
-                "runtime": "10m",
+                "runtime": "12m",
                 "project": "proj_rapidresponse",
             }
 

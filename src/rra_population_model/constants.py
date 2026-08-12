@@ -30,7 +30,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v6", "v7", "v7_1", "r2023a"]
+    version: Literal["v6", "v7", "v7_1", "v8", "r2023a"]
     time_points: list[str]
     measures: list[str]
 
@@ -94,6 +94,24 @@ BUILT_VERSIONS = {
             "height",
         ],
     ),
+    # Built by newer code than this branch, but its tiles and features are on
+    # disk for all 24 quarters. Registering it here is what makes ALL_TIME_POINTS
+    # cover the feature directories that actually exist; without it the list
+    # stops at 2025q1 and every step silently skips the six newest time points.
+    # Note it is deliberately absent from the runner's BUILT_VERSIONS list, so
+    # nothing here tries to rebuild it - `_generate_microsoft_derived_measures`
+    # has no v8 entry and would raise if it were added there.
+    "microsoft_v8": BuiltVersion(
+        provider="microsoft",
+        version="v8",
+        time_points=[
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2027), range(1, 5))
+        ][1:-3],
+        measures=[
+            "density",
+            "height",
+        ],
+    ),
 }
 
 DENOMINATORS = []
@@ -106,6 +124,48 @@ for built_version in BUILT_VERSIONS.values():
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
+
+# Open Building Map is a static snapshot, so it ships as a single vintage. The
+# provider name is lowercase and hyphen-free because features are addressed as
+# `{provider}_{measure}` and split on underscores.
+OBM_VERSION = "2025-04-04"
+OBM_PROVIDER = "obm_2025q2"
+# Real feature files are written here and every other time point links to them.
+# 2025q2 is the quarter the 2025-04-04 snapshot actually falls in.
+OBM_TIME_POINT = "2025q2"
+# Where the heights come from. This is GHSL's epoch, not ours, and does not move
+# with OBM_TIME_POINT.
+OBM_GHSL_TIME_POINT = "2025q1"
+
+# The eight parent building types the covariate rasterizes, in the order the
+# covariate writes them.
+OBM_PARENTS = [
+    "residential_mu",
+    "commercial",
+    "industrial",
+    "agriculture",
+    "government",
+    "education",
+    "assembly",
+    "unknown",
+]
+# `unknown` is deliberately excluded: it is treated as residential, because
+# unlabelled footprints are dimensionally indistinguishable from labelled
+# housing. `proportion_residential` is therefore 1 - nonres/total, which keeps
+# `unknown` in the denominator but out of the numerator.
+OBM_NONRESIDENTIAL_PARENTS = [
+    p for p in OBM_PARENTS if p not in ("residential_mu", "unknown")
+]
+
+# GHSL's ANBH is continuous metres with no concept of a storey, but it has a hard
+# empirical floor: the minimum non-zero value is ~2.486 m with the low-rise mass
+# at ~2.50 m. We impute one storey wherever OBM sees a footprint and GHSL sees no
+# height. This agrees with HEIGHT_MIN (2.4384 m, 8 ft) to within 5 cm.
+OBM_IMPUTED_HEIGHT = 2.5
+
+# Pixels whose parent densities sum above this are rescaled by 1/total. See
+# derive_features for why the tolerance is not simply zero.
+OBM_RESCALE_TOLERANCE = 1e-6
 
 FEATURE_AVERAGE_RADII = [
     100,

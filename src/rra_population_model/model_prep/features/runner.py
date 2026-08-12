@@ -14,6 +14,7 @@ from rra_population_model.model_prep.features.built import (
 )
 from rra_population_model.model_prep.features.metadata import get_feature_metadata
 from rra_population_model.model_prep.features.ntl import process_ntl
+from rra_population_model.model_prep.features.obm import process_obm
 from rra_population_model.model_prep.features.overture import process_overture
 
 # GHSL first, as we need the residential mask for msft
@@ -65,6 +66,15 @@ def features_main(
     process_overture(
         feature_metadata=feature_metadata,
         pm_data=pm_data,
+    )
+
+    print("Processing OBM")
+    process_obm(
+        pm_data=pm_data,
+        bd_data=bd_data,
+        resolution=feature_metadata.resolution,
+        block_key=feature_metadata.block_key,
+        time_point=feature_metadata.time_point,
     )
 
 
@@ -141,6 +151,86 @@ def geospatial_average_features_task(
 ) -> None:
     geospatial_average_features_main(
         block_key, time_point, resolution, building_density_dir, output_dir
+    )
+
+
+def obm_features_main(
+    block_key: str,
+    resolution: str,
+    building_density_dir: str | Path,
+    model_root: str | Path,
+) -> None:
+    """Build only the OBM features for one block, at the canonical time point."""
+    print(f"Processing OBM features for block {block_key}")
+    bd_data = BuildingDensityData(building_density_dir)
+    pm_data = PopulationModelData(model_root)
+
+    process_obm(
+        pm_data=pm_data,
+        bd_data=bd_data,
+        resolution=resolution,
+        block_key=block_key,
+        time_point=pmc.OBM_TIME_POINT,
+    )
+
+
+@click.command()
+@clio.with_block_key()
+@clio.with_resolution()
+@clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
+@clio.with_output_directory(pmc.MODEL_ROOT)
+def obm_features_task(
+    block_key: str,
+    resolution: str,
+    building_density_dir: str,
+    output_dir: str,
+) -> None:
+    """Build the OBM features for a given block."""
+    obm_features_main(block_key, resolution, building_density_dir, output_dir)
+
+
+@click.command()
+@clio.with_resolution()
+@clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
+@clio.with_output_directory(pmc.MODEL_ROOT)
+@clio.with_queue()
+def obm_features(
+    resolution: str,
+    building_density_dir: str,
+    output_dir: str,
+    queue: str,
+) -> None:
+    """Prepare the Open Building Map features."""
+    pm_data = PopulationModelData(output_dir)
+    # Only blocks with OBM coverage exist, and that set is already the right one;
+    # the modeling frame is a superset.
+    block_keys = pm_data.list_open_building_map_blocks(resolution)
+    print(f"Submitting {len(block_keys)} jobs to process OBM features")
+
+    jobmon.run_parallel(
+        runner="pmtask model_prep",
+        task_name="obm_features",
+        node_args={
+            "block-key": block_keys,
+        },
+        task_args={
+            "building-density-dir": building_density_dir,
+            "output-dir": output_dir,
+            "resolution": resolution,
+        },
+        task_resources={
+            "queue": queue,
+            "cores": 1,
+            # Eight 8192^2 float32 reads promoted to float64, plus a GHSL height
+            # read and several derived arrays of the same size. 10G was measured
+            # too tight on the densest blocks, so it sits at 15G.
+            "memory": "15G",
+            "runtime": "30m",
+            "project": "proj_rapidresponse",
+            "constraints": "archive",
+        },
+        log_root=pm_data.log_dir("preprocess_obm_features"),
+        max_attempts=3,
     )
 
 

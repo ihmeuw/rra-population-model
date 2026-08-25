@@ -1,5 +1,6 @@
 import abc
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import rasterra as rt
@@ -11,6 +12,7 @@ from rra_population_model.data import (
 )
 from rra_population_model.model_prep.features import utils
 from rra_population_model.model_prep.features.metadata import FeatureMetadata
+from rra_population_model.model_prep.features.msft_obm import splice_p
 
 
 class ProcessingStrategy:
@@ -260,7 +262,7 @@ def _generate_microsoft_derived_measures(
     feature_metadata: FeatureMetadata,
     built_version_name: str,
 ) -> dict[str, Path]:
-    feature_dict = {
+    feature_specs: dict[str, dict[str, Any]] = {
         "microsoft_v6": {
             "density": "microsoft_v6_density",
             "height": "ghsl_r2023a_height",
@@ -281,7 +283,24 @@ def _generate_microsoft_derived_measures(
             "height": "microsoft_v7_e101_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
         },
-    }[built_version_name]
+        "microsoft_v8": {
+            "density": "microsoft_v8_density",
+            "height": "microsoft_v8_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            # The shipped v8 carries only these. residential_density and the
+            # nonresidential_* measures were never built for it, and nothing
+            # downstream reads them, so emitting the full six would put four
+            # unused rasters per block-epoch into the tree.
+            "measures": (
+                "density",
+                "volume",
+                "residential_volume",
+                "proportion_residential",
+            ),
+        },
+
+    }
+    feature_dict = feature_specs[built_version_name]
     density = pm_data.load_feature(
         feature_name=feature_dict["density"],
         **feature_metadata.shared_kwargs,
@@ -291,10 +310,23 @@ def _generate_microsoft_derived_measures(
         feature_name=feature_dict["height"],
         **feature_metadata.shared_kwargs,
     )._ndarray
-    p_residential_arr = pm_data.load_feature(  # noqa: SLF001
-        feature_name=feature_dict["p_residential"],
-        **feature_metadata.shared_kwargs,
-    )._ndarray
+    # Resolve p through the shared splice rather than reading the raster raw.
+    # GHSL writes 0.0 where it sees no building; multiplying by that directly
+    # zeroes the residential volume on pixels the shipped products keep fully
+    # residential - 13.9% of v8's built pixels on a test block.
+    p_provider = feature_dict["p_residential"].removesuffix(
+        "_proportion_residential"
+    )
+    p_residential_arr, _ = splice_p([(
+        pm_data.load_feature(
+            feature_name=feature_dict["p_residential"],
+            **feature_metadata.shared_kwargs,
+        ).to_numpy(),
+        pm_data.load_feature(
+            feature_name=f"{p_provider}_density",
+            **feature_metadata.shared_kwargs,
+        ).to_numpy(),
+    )])
 
     # Since we're crosswalking, ensure we have height wherever
     # there is density, even if GHSL doesn't think there is density.
@@ -314,9 +346,16 @@ def _generate_microsoft_derived_measures(
         "residential_volume": lambda d, h, p: h * d * p,
         "nonresidential_volume": lambda d, h, p: h * d * (1 - p),
     }
+    out_ops["proportion_residential"] = lambda _, __, p: p
+    measures = feature_dict.get("measures", tuple(out_ops))
+    out_ops = {m: out_ops[m] for m in measures}
+
     for measure, op in out_ops.items():
+        # Cast explicitly: the shipped rasters are float32, and the writer's
+        # PREDICTOR=2 rejects 64-bit samples. p comes back from splice_p as
+        # float64, which would otherwise promote every product.
         out = rt.RasterArray(
-            data=op(density_arr, height_arr, p_residential_arr),  # type: ignore[no-untyped-call]
+            data=op(density_arr, height_arr, p_residential_arr).astype(np.float32),  # type: ignore[no-untyped-call]
             transform=density.transform,
             crs=density.crs,
             no_data_value=np.nan,

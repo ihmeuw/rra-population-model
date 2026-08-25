@@ -1,17 +1,18 @@
 """Build the Open Building Map features from the OBM covariate rasters.
 
-The covariate ships eight parent building types x two measures per block. Here we
-collapse those into the five features the model consumes, mirroring the shape of
-`ghsl_r2023a` and `microsoft_v8`:
+The covariate ships eight parent building types x two measures per block. This
+module collapses those into the six measures the model consumes, mirroring the
+shape of `ghsl_r2023a` and `microsoft_v8`:
 
     {provider}_density
+    {provider}_height
     {provider}_volume
     {provider}_residential_volume
     {provider}_proportion_residential
-    {provider}_height
+    {provider}_p_observed
 
-OBM is a static 2025-04-04 snapshot, so the real files are written once into a
-canonical time point and every other time point links to them.
+OBM is a static snapshot, so the real files are written once into a canonical
+time point and every other time point links to them.
 """
 
 from pathlib import Path
@@ -147,6 +148,12 @@ def derive_features(
         "residential_volume": volume * proportion_residential,
         "proportion_residential": proportion_residential,
         "height": height,
+        # Where OBM actually saw a building. Identical to `density > 0`, and
+        # shipped anyway: downstream this is the line between a measured
+        # residential fraction and an imputed one, and `microsoft_v8_obm` has no
+        # way to express it - OBM's own p = 1 and the no-source fallback write
+        # the same number.
+        pmc.OBM_OBSERVED_MEASURE: (total > 0).astype(np.float64),
     }
     return features, int(rescaled.sum())
 

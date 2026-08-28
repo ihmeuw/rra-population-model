@@ -29,10 +29,21 @@ class RESOLUTIONS(StrEnum):
 
 
 class BuiltVersion(BaseModel):
-    provider: Literal["ghsl", "microsoft"]
-    version: Literal["v6", "v7", "v7_1", "r2023a"]
+    provider: Literal["ghsl", "microsoft", "obm"]
+    version: Literal["v6", "v7", "v7_1", "v8", "r2023a", "20250404"]
     time_points: list[str]
     measures: list[str]
+    # Which ProcessingStrategy subclass builds this version's own measures, by
+    # class name. Providers whose source tiles live in the building-density
+    # layout need nothing here; OBM does, because its covariate is eight
+    # occupancy classes under a different root and its density has to be summed
+    # and rescaled before anything can be derived from it.
+    strategy: str | None = None
+    # Whether the spatially-averaged companions are built for this version.
+    # `geospatial_average_features` averages a fixed six measures across every
+    # registered version, four of which OBM does not produce, so it is opted out
+    # rather than left to fail on the first missing raster.
+    geospatial_averages: bool = True
 
     @property
     def name(self) -> str:
@@ -94,6 +105,59 @@ BUILT_VERSIONS = {
             "height",
         ],
     ),
+    # Built by newer code than this branch, but its tiles and features are on
+    # disk for all 24 quarters. Registering it here is what makes ALL_TIME_POINTS
+    # cover the feature directories that actually exist; without it the list
+    # stops at 2025q1 and every step silently skips the six newest time points.
+    # Note it is deliberately absent from the runner's BUILT_VERSIONS list, so
+    # nothing here tries to rebuild it - `_generate_microsoft_derived_measures`
+    # has no v8 entry and would raise if it were added there.
+    "microsoft_v8": BuiltVersion(
+        provider="microsoft",
+        version="v8",
+        time_points=[
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2027), range(1, 5))
+        ][1:-3],
+        measures=[
+            "density",
+            "height",
+        ],
+    ),
+    # Open Building Map. A single-epoch version: `get_processing_strategy` sees
+    # a time point that is both first and last, so it fills every other time
+    # point by symlink - which is exactly the static-snapshot layout OBM needs,
+    # for free.
+    #
+    # `measures` names what ObmStrategy writes itself. It is not read from the
+    # building-density tiles like the other versions: OBM's covariate is eight
+    # occupancy classes under a different root, so the strategy sums and
+    # rescales them rather than linking a ready-made density raster.
+    #
+    # It writes all six rather than leaving volume and residential_volume to the
+    # shared derivation. `derive_features` has to compute them anyway so
+    # `check_features` can assert `volume / density == height`, and deriving
+    # them a second time from the written float32 rasters rounds at a different
+    # point - a 1 ulp difference on ~0.05% of land pixels. Writing what was
+    # already validated keeps this migration a pure refactor.
+    #
+    # The version string is the literal rather than OBM_VERSION because that
+    # constant is defined below, after DENOMINATORS is generated from this dict.
+    # OBM_PROVIDER is derived back off this entry so the two cannot drift.
+    "obm_20250404": BuiltVersion(
+        provider="obm",
+        version="20250404",
+        time_points=["2025q2"],
+        measures=[
+            "density",
+            "height",
+            "volume",
+            "residential_volume",
+            "proportion_residential",
+            "p_observed",
+        ],
+        strategy="ObmStrategy",
+        geospatial_averages=False,
+    ),
 }
 
 DENOMINATORS = []
@@ -106,6 +170,132 @@ for built_version in BUILT_VERSIONS.values():
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
 
+
+# Open Building Map is a static snapshot, so it ships as a single vintage.
+#
+# `2025-04-04` is the last-modified date GFZ stamps on the `_data` folder of
+# publication 2025-002 (doi:10.5880/GFZ.LKUT.2025.002), which is the only thing
+# distinguishing one download from another - the package carries no version
+# field. It pins *which upload we pulled*, not how current the data is: the
+# footprints themselves carry OSM timestamps of 2024-09-26.
+OBM_VERSION = "2025-04-04"
+# The provider is that date without separators. Hyphens are out because feature
+# names are addressed as `{provider}_{measure}`; extra underscores would make
+# the provider/measure boundary unreadable, and dots break `Path.suffixes`.
+#
+# Derived from the registered BuiltVersion rather than restated, so the feature
+# prefix and the built-version key cannot drift apart.
+OBM_BUILT_VERSION = BUILT_VERSIONS["obm_20250404"]
+OBM_PROVIDER = OBM_BUILT_VERSION.name
+# Real feature files are written here and every other time point links to them.
+# This is an *epoch directory*, so it has to be one of ALL_TIME_POINTS - it
+# cannot follow OBM_PROVIDER. 2025q2 is the quarter the snapshot falls in.
+OBM_TIME_POINT = "2025q2"
+# Where the heights come from. This is GHSL's epoch, not ours, and does not move
+# with OBM_TIME_POINT.
+OBM_GHSL_TIME_POINT = "2025q1"
+
+# The eight parent building types the covariate rasterizes, in the order the
+# covariate writes them.
+OBM_PARENTS = [
+    "residential_mu",
+    "commercial",
+    "industrial",
+    "agriculture",
+    "government",
+    "education",
+    "assembly",
+    "unknown",
+]
+# `unknown` is deliberately excluded: it is treated as residential, because
+# unlabelled footprints are dimensionally indistinguishable from labelled
+# housing. `proportion_residential` is therefore 1 - nonres/total, which keeps
+# `unknown` in the denominator but out of the numerator.
+OBM_NONRESIDENTIAL_PARENTS = [
+    p for p in OBM_PARENTS if p not in ("residential_mu", "unknown")
+]
+
+# GHSL's ANBH is continuous metres with no concept of a storey, but it has a hard
+# empirical floor: the minimum non-zero value is ~2.486 m with the low-rise mass
+# at ~2.50 m. We impute one storey wherever OBM sees a footprint and GHSL sees no
+# height. This agrees with HEIGHT_MIN (2.4384 m, 8 ft) to within 5 cm.
+OBM_IMPUTED_HEIGHT = 2.5
+
+# The observation mask: 1 where OBM sees a building, 0 elsewhere on land.
+#
+# It lives with the OBM build rather than the v8 product because it describes
+# OBM, not the splice - a single static snapshot, written once and linked like
+# every other OBM measure, instead of 24 near-identical copies per block.
+#
+# Note it is exactly `{provider}_density > 0`, so it carries no information the
+# density raster does not. It is shipped as an explicit boolean because the
+# distinction between "measured" and "imputed" is the one consumers most need
+# and most easily get wrong, and a named mask is harder to misread than a
+# threshold someone has to know to apply.
+OBM_OBSERVED_MEASURE = "p_observed"
+
+# Pixels whose parent densities sum above this are rescaled by 1/total. See
+# derive_features for why the tolerance is not simply zero.
+OBM_RESCALE_TOLERANCE = 1e-6
+
+# ---------------------------------------------------------------------------
+# Microsoft v8, with OBM supplying the residential split instead of GHSL.
+#
+# Microsoft supplies its own density and height; the only thing it borrows is a
+# residential fraction. `microsoft_v8` takes that from GHSL. This provider takes
+# it from OBM where OBM has an opinion and falls back to GHSL where it does not,
+# so the layer stays global and every pixel that differs from `microsoft_v8`
+# differs because OBM said something - not because it said nothing.
+# The vintage is carried in the name: this product is only meaningful relative
+# to the OBM snapshot that supplied its residential split, and a future snapshot
+# should not silently overwrite it.
+MSFT_V8_OBM_PROVIDER = f"microsoft_v8_obm_{OBM_VERSION.replace('-', '')}"
+MSFT_V8_SOURCE_PROVIDER = "microsoft_v8"
+# Priority order for the residential fraction. First source with a building in
+# the pixel wins; if none has one, the fraction falls back to fully residential,
+# which is what `microsoft_v8` does today.
+MSFT_V8_OBM_P_SOURCES = (OBM_PROVIDER, "ghsl_r2023a")
+MSFT_V8_OBM_P_FALLBACK = 1.0
+# Measures taken unchanged from microsoft_v8 - Microsoft's own density, height
+# and volume, which the residential-source swap cannot touch.
+#
+# Deliberately empty: aliasing them under the `microsoft_v8_obm_` prefix would
+# double the layer's path count (1.0M -> 2.0M) to publish files byte-identical
+# to ones already on disk. Nothing reads them - the model loads a denominator as
+# a single named raster, and `microsoft_v8_obm` is not in BUILT_VERSIONS, so it
+# never reaches DENOMINATORS. Anyone wanting v8's density reads
+# `microsoft_v8_density`, which is its canonical name.
+#
+# Re-populating this tuple is all that is needed to publish the aliases; they
+# are symlinks, so a rebuild is seconds per block. Note that registering the
+# provider as a denominator would *also* require `residential_density`, which
+# nothing currently produces.
+MSFT_V8_OBM_LINKED_MEASURES: tuple[str, ...] = ()
+# Binary surface mask splitting the built footprint on the one distinction that
+# matters downstream: was the residential fraction *observed* by OBM, or
+# *imputed*? 1 where OBM supplied it, 0 where GHSL filled in or where no source
+# saw anything and p = 1 was asserted.
+#
+# The mask is needed because `proportion_residential` cannot carry this. OBM's
+# own p = 1 and the no-source fallback are the same number, so the raster alone
+# gives a consumer no way to tell a measurement from an assumption - on one test
+# block 98% of OBM's pixels sit at p = 1 already.
+#
+# GHSL's fill and the no-source fallback are deliberately on the same side of
+# the split. A consumer who needs them apart can recover the fallback by
+# intersecting the built footprint with the complement of this mask and the
+# complement of GHSL's own density mask.
+# Measures written as real rasters rather than linked from microsoft_v8.
+#
+# Only the one. `proportion_residential` was dropped because it is recoverable
+# exactly wherever it means anything:
+#     p = microsoft_v8_obm_..._residential_volume / microsoft_v8_volume
+# and undefined where the denominator is zero, which is precisely where p has no
+# effect. Writing it would cost another 115,128 rasters to store a quotient.
+#
+# The observation mask moved to the OBM build - see OBM_OBSERVED_MEASURE. It
+# describes a static snapshot, so one raster serves all 24 epochs.
+MSFT_V8_OBM_DERIVED_MEASURES = ("residential_volume",)
 
 FEATURE_AVERAGE_RADII = [
     100,

@@ -485,7 +485,9 @@ class PopulationModelData:
     ) -> None:
         dest = self.feature_path(resolution, block_key, feature_name, time_point)
         mkdir(dest.parent, parents=True, exist_ok=True)
-        if dest.exists():
+        # `exists` follows symlinks, so it misses a dangling link left behind by a
+        # partial run and `symlink_to` would then raise FileExistsError.
+        if dest.is_symlink() or dest.exists():
             dest.unlink()
         dest.symlink_to(source_path)
 
@@ -1021,6 +1023,45 @@ class PopulationModelData:
                 overture_types = [f.stem for f in overture_class_dir.glob("*.parquet")]
                 covariates[overture_class] = sorted(overture_types)
         return covariates
+
+    @property
+    def open_building_map_covariates(self) -> Path:
+        return self.population_covariates / "open_building_map" / pmc.OBM_VERSION
+
+    def open_building_map_covariate_path(
+        self,
+        resolution: str,
+        block_key: str,
+        parent_building_type: str,
+        measure: str,
+    ) -> Path:
+        return (
+            self.open_building_map_covariates
+            / f"{resolution}m"
+            / block_key
+            / f"{parent_building_type}_{measure}.tif"
+        )
+
+    def load_open_building_map_covariate(
+        self,
+        resolution: str,
+        block_key: str,
+        parent_building_type: str,
+        measure: str,
+    ) -> rt.RasterArray:
+        path = self.open_building_map_covariate_path(
+            resolution, block_key, parent_building_type, measure
+        )
+        return rt.load_raster(path)
+
+    def list_open_building_map_blocks(self, resolution: str) -> list[str]:
+        """List the blocks the OBM covariate covers.
+
+        Only blocks with OBM coverage are written, so this is the right task list
+        for the feature step; the modeling frame is a superset.
+        """
+        root = self.open_building_map_covariates / f"{resolution}m"
+        return sorted(p.name for p in root.iterdir() if p.is_dir())
 
 
 def bounds_to_bbox(bounds: Bounds | None) -> BBox | None:

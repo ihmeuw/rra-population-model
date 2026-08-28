@@ -29,21 +29,10 @@ class RESOLUTIONS(StrEnum):
 
 
 class BuiltVersion(BaseModel):
-    provider: Literal["ghsl", "microsoft", "obm"]
-    version: Literal["v6", "v7", "v7_1", "v8", "r2023a", "20250404"]
+    provider: Literal["ghsl", "microsoft"]
+    version: Literal["v6", "v7", "v7_1", "v8", "r2023a"]
     time_points: list[str]
     measures: list[str]
-    # Which ProcessingStrategy subclass builds this version's own measures, by
-    # class name. Providers whose source tiles live in the building-density
-    # layout need nothing here; OBM does, because its covariate is eight
-    # occupancy classes under a different root and its density has to be summed
-    # and rescaled before anything can be derived from it.
-    strategy: str | None = None
-    # Whether the spatially-averaged companions are built for this version.
-    # `geospatial_average_features` averages a fixed six measures across every
-    # registered version, four of which OBM does not produce, so it is opted out
-    # rather than left to fail on the first missing raster.
-    geospatial_averages: bool = True
 
     @property
     def name(self) -> str:
@@ -123,41 +112,7 @@ BUILT_VERSIONS = {
             "height",
         ],
     ),
-    # Open Building Map. A single-epoch version: `get_processing_strategy` sees
-    # a time point that is both first and last, so it fills every other time
-    # point by symlink - which is exactly the static-snapshot layout OBM needs,
-    # for free.
-    #
-    # `measures` names what ObmStrategy writes itself. It is not read from the
-    # building-density tiles like the other versions: OBM's covariate is eight
-    # occupancy classes under a different root, so the strategy sums and
-    # rescales them rather than linking a ready-made density raster.
-    #
-    # It writes all six rather than leaving volume and residential_volume to the
-    # shared derivation. `derive_features` has to compute them anyway so
-    # `check_features` can assert `volume / density == height`, and deriving
-    # them a second time from the written float32 rasters rounds at a different
-    # point - a 1 ulp difference on ~0.05% of land pixels. Writing what was
-    # already validated keeps this migration a pure refactor.
-    #
-    # The version string is the literal rather than OBM_VERSION because that
-    # constant is defined below, after DENOMINATORS is generated from this dict.
-    # OBM_PROVIDER is derived back off this entry so the two cannot drift.
-    "obm_20250404": BuiltVersion(
-        provider="obm",
-        version="20250404",
-        time_points=["2025q2"],
-        measures=[
-            "density",
-            "height",
-            "volume",
-            "residential_volume",
-            "proportion_residential",
-            "p_observed",
-        ],
-        strategy="ObmStrategy",
-        geospatial_averages=False,
-    ),
+
 }
 
 DENOMINATORS = []
@@ -182,11 +137,7 @@ OBM_VERSION = "2025-04-04"
 # The provider is that date without separators. Hyphens are out because feature
 # names are addressed as `{provider}_{measure}`; extra underscores would make
 # the provider/measure boundary unreadable, and dots break `Path.suffixes`.
-#
-# Derived from the registered BuiltVersion rather than restated, so the feature
-# prefix and the built-version key cannot drift apart.
-OBM_BUILT_VERSION = BUILT_VERSIONS["obm_20250404"]
-OBM_PROVIDER = OBM_BUILT_VERSION.name
+OBM_PROVIDER = "obm_20250404"
 # Real feature files are written here and every other time point links to them.
 # This is an *epoch directory*, so it has to be one of ALL_TIME_POINTS - it
 # cannot follow OBM_PROVIDER. 2025q2 is the quarter the snapshot falls in.

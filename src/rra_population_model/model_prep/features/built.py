@@ -10,7 +10,7 @@ from rra_population_model.data import (
     BuildingDensityData,
     PopulationModelData,
 )
-from rra_population_model.model_prep.features import obm, utils
+from rra_population_model.model_prep.features import utils
 from rra_population_model.model_prep.features.metadata import FeatureMetadata
 from rra_population_model.model_prep.features.msft_obm import splice_p
 
@@ -131,17 +131,16 @@ class ProcessStrategy(ProcessingStrategy):
         bd_data: BuildingDensityData,  # noqa: ARG002
         pm_data: PopulationModelData,
     ) -> dict[str, Path]:
-        # Some versions ship every measure they have and derive nothing. Listing
-        # them explicitly keeps the fall-through loud: an unrecognised version is
-        # a mistake, not a version with no derived measures.
-        if self.built_version.name in NO_DERIVED_MEASURES:
+        if self.built_version.name == "ghsl_r2023a":
+            # No derived measures for GHSL
             return {}
-        if self.built_version.name not in FEATURE_SPECS:
+        elif self.built_version.name.startswith("microsoft"):
+            return _generate_microsoft_derived_measures(
+                pm_data, self.feature_metadata, self.built_version.name
+            )
+        else:
             msg = f"Unknown built version: {self.built_version.name}"
             raise ValueError(msg)
-        return _generate_provider_derived_measures(
-            pm_data, self.feature_metadata, self.built_version.name
-        )
 
     def generate_geospatial_averages(
         self,
@@ -196,95 +195,6 @@ class ProcessStrategy(ProcessingStrategy):
                     block_key=feature_metadata.block_key,
                     resolution=feature_metadata.resolution,
                 )
-
-
-class ObmStrategy(ProcessStrategy):
-    """Build OBM's own measures from the occupancy covariate.
-
-    `ProcessStrategy.generate_measures` links ready-made density and height
-    tiles out of the building-density layout. OBM has neither: its covariate is
-    eight occupancy-class rasters under a different root, and its density is
-    their sum after rescaling the pixels where OSM building relations
-    double-count the same ground. Height is GHSL's ANBH with one storey imputed
-    where OBM sees a footprint and GHSL sees nothing.
-
-    Everything after that is inherited unchanged - in particular the symlink
-    fan-out, which for a single-epoch version fills all 69 other time points.
-    """
-
-    def generate_measures(
-        self, bd_data: BuildingDensityData, pm_data: PopulationModelData
-    ) -> dict[str, Path]:
-        block_key = self.feature_metadata.block_key
-        resolution = self.feature_metadata.resolution
-        covariate_root = (
-            pm_data.open_building_map_covariates / f"{resolution}m" / block_key
-        )
-        if not covariate_root.exists():
-            print(f"No OBM coverage for block {block_key}; skipping.")
-            return {}
-
-        print(f"Loading OBM parent densities for {block_key}")
-        density, land, template = obm.load_parent_densities(
-            pm_data, resolution, block_key
-        )
-        built = land & (obm.sum_parents(density, pmc.OBM_PARENTS) > 0)
-
-        print("Loading GHSL height")
-        height, n_imputed = obm.load_height(bd_data, resolution, block_key, built)
-
-        print("Deriving OBM measures")
-        # `check_features` asserts the six are mutually consistent - notably
-        # `volume / density == height` - before any of them is written.
-        features, n_rescaled = obm.derive_features(density, height)
-        obm.check_features(features, height, land)
-
-        n_built = int(built.sum())
-        imputed_share = n_imputed / n_built if n_built else 0.0
-        print(
-            f"{block_key}: {n_built} built pixels, {n_rescaled} rescaled, "
-            f"{n_imputed} height-imputed ({imputed_share:.2%})"
-        )
-
-        out_paths = {}
-        for measure in self.built_version.measures:
-            feature_name = f"{self.built_version.name}_{measure}"
-            # Every measure carries the same nan mask, matching GHSL.
-            raster = rt.RasterArray(
-                np.where(land, features[measure], np.nan).astype(np.float32),
-                transform=template.transform,
-                crs=template.crs,
-                no_data_value=np.nan,
-            )
-            pm_data.save_feature(
-                raster,
-                feature_name=feature_name,
-                **self.feature_metadata.shared_kwargs,
-            )
-            out_paths[feature_name] = pm_data.feature_path(
-                feature_name=feature_name,
-                **self.feature_metadata.shared_kwargs,
-            )
-        return out_paths
-
-    def generate_geospatial_averages(
-        self,
-        features: list[str],
-        feature_average_radii: list[int],
-        pm_data: PopulationModelData,
-    ) -> dict[str, Path]:
-        """Honour the version's opt-out.
-
-        `geospatial_average_features` averages a fixed six measures across every
-        registered version. OBM produces two of them, so running it would fail
-        on the first missing raster rather than skip.
-        """
-        if not self.built_version.geospatial_averages:
-            print(f"Geospatial averages disabled for {self.built_version.name}.")
-            return {}
-        return super().generate_geospatial_averages(
-            features, feature_average_radii, pm_data
-        )
 
 
 class InterpolateStrategy(ProcessStrategy):
@@ -344,73 +254,53 @@ class InterpolateStrategy(ProcessStrategy):
         )
 
 
-# Strategy classes a BuiltVersion may name. Keyed by class name so the
-# registration in constants.py stays a plain string and does not have to import
-# from here.
-STRATEGIES: dict[str, type[ProcessStrategy]] = {
-    "ObmStrategy": ObmStrategy,
-}
-
-# Versions that write every measure they have, so nothing is derived from them.
-# GHSL ships its full set; OBM's ObmStrategy writes all six itself.
-NO_DERIVED_MEASURES = frozenset({"ghsl_r2023a", pmc.OBM_PROVIDER})
-
 HEIGHT_MIN = 2.4384  # 8ft
 
 
-# How each version derives its measures from the three source rasters it names.
-# `measures` is optional and selects which of `out_ops` to emit; the default is
-# all of them.
-#
-# Only versions that *borrow* a residential fraction appear here. GHSL ships
-# every measure it has, and OBM writes its own through ObmStrategy - see
-# NO_DERIVED_MEASURES.
-FEATURE_SPECS: dict[str, dict[str, Any]] = {
-    "microsoft_v6": {
-        "density": "microsoft_v6_density",
-        "height": "ghsl_r2023a_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v7": {
-        "density": "microsoft_v7_density",
-        "height": "microsoft_v7_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v7_1": {
-        "density": "microsoft_v7_1_density",
-        "height": "microsoft_v7_1_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v7_e101": {
-        "density": "microsoft_v7_e101_density",
-        "height": "microsoft_v7_e101_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v8": {
-        "density": "microsoft_v8_density",
-        "height": "microsoft_v8_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-        # The shipped v8 carries only these. residential_density and the
-        # nonresidential_* measures were never built for it, and nothing
-        # downstream reads them, so emitting the full six would put four
-        # unused rasters per block-epoch into the tree.
-        "measures": (
-            "density",
-            "volume",
-            "residential_volume",
-            "proportion_residential",
-        ),
-    },
-
-}
-
-
-def _generate_provider_derived_measures(
+def _generate_microsoft_derived_measures(
     pm_data: PopulationModelData,
     feature_metadata: FeatureMetadata,
     built_version_name: str,
 ) -> dict[str, Path]:
-    feature_dict = FEATURE_SPECS[built_version_name]
+    feature_specs: dict[str, dict[str, Any]] = {
+        "microsoft_v6": {
+            "density": "microsoft_v6_density",
+            "height": "ghsl_r2023a_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v7": {
+            "density": "microsoft_v7_density",
+            "height": "microsoft_v7_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v7_1": {
+            "density": "microsoft_v7_1_density",
+            "height": "microsoft_v7_1_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v7_e101": {
+            "density": "microsoft_v7_e101_density",
+            "height": "microsoft_v7_e101_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+        },
+        "microsoft_v8": {
+            "density": "microsoft_v8_density",
+            "height": "microsoft_v8_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            # The shipped v8 carries only these. residential_density and the
+            # nonresidential_* measures were never built for it, and nothing
+            # downstream reads them, so emitting the full six would put four
+            # unused rasters per block-epoch into the tree.
+            "measures": (
+                "density",
+                "volume",
+                "residential_volume",
+                "proportion_residential",
+            ),
+        },
+
+    }
+    feature_dict = feature_specs[built_version_name]
     density = pm_data.load_feature(
         feature_name=feature_dict["density"],
         **feature_metadata.shared_kwargs,
@@ -531,18 +421,11 @@ def get_processing_strategy(
     year, quarter = time_point.split("q")
     time_point_float = float(year) + (float(quarter) - 1) / 4
 
-    # A version may name the class that builds its own measures; everything
-    # else about the dispatch is unchanged. Only the "process" branch honours
-    # it - skipping and interpolating are the same work whatever the source.
-    process_cls: type[ProcessStrategy] = ProcessStrategy
-    if built_version.strategy is not None:
-        process_cls = STRATEGIES[built_version.strategy]
-
     strategy: ProcessingStrategy
     fill_time_points = []
     if time_point in bv_tps:
         # If the time point is in the built version, we process
-        strategy = process_cls(
+        strategy = ProcessStrategy(
             built_version=built_version, feature_metadata=feature_metadata
         )
         # If the time point is also terminal, we extrapolate as well

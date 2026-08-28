@@ -15,18 +15,16 @@ from rra_population_model.model_prep.features.built import (
 from rra_population_model.model_prep.features.metadata import get_feature_metadata
 from rra_population_model.model_prep.features.msft_obm import process_msft_obm
 from rra_population_model.model_prep.features.ntl import process_ntl
+from rra_population_model.model_prep.features.obm import process_obm
 from rra_population_model.model_prep.features.overture import process_overture
 
-# GHSL first, as we need the residential mask for msft. OBM last of the built
-# versions, because it reads GHSL's height - and because process_msft_obm,
-# which runs after this loop, reads the residential fraction OBM writes.
+# GHSL first, as we need the residential mask for msft
 BUILT_VERSIONS = [
     pmc.BUILT_VERSIONS["ghsl_r2023a"],
     pmc.BUILT_VERSIONS["microsoft_v6"],
     pmc.BUILT_VERSIONS["microsoft_v7"],
     pmc.BUILT_VERSIONS["microsoft_v7_1"],
     pmc.BUILT_VERSIONS["microsoft_v8"],
-    pmc.OBM_BUILT_VERSION,
 ]
 
 
@@ -72,8 +70,14 @@ def features_main(
         pm_data=pm_data,
     )
 
-    # OBM is built by the BUILT_VERSIONS loop above, via ObmStrategy - it is a
-    # registered built version rather than a special case.
+    print("Processing OBM")
+    process_obm(
+        pm_data=pm_data,
+        bd_data=bd_data,
+        resolution=feature_metadata.resolution,
+        block_key=feature_metadata.block_key,
+        time_point=feature_metadata.time_point,
+    )
 
     # Must follow OBM: it reads the residential fraction OBM just wrote (or the
     # symlink an earlier canonical run left at this time point).
@@ -168,33 +172,17 @@ def obm_features_main(
     building_density_dir: str | Path,
     model_root: str | Path,
 ) -> None:
-    """Build only the OBM features for one block, at the canonical time point.
-
-    A thin wrapper over the same ObmStrategy the general features command uses,
-    so the two cannot produce different rasters. It exists because rebuilding
-    OBM alone is common and running the full feature set to do it would also
-    rewrite every other provider.
-    """
+    """Build only the OBM features for one block, at the canonical time point."""
     print(f"Processing OBM features for block {block_key}")
     bd_data = BuildingDensityData(building_density_dir)
     pm_data = PopulationModelData(model_root)
 
-    built_version = pmc.OBM_BUILT_VERSION
-    feature_metadata = get_feature_metadata(
-        pm_data, bd_data, resolution, block_key, built_version.time_points[0]
-    )
-    strategy, fill_time_points = get_processing_strategy(
-        built_version, feature_metadata
-    )
-    measure_paths = strategy.generate_measures(bd_data, pm_data)
-    if not measure_paths:
-        return
-    derived_measure_paths = strategy.generate_derived_measures(bd_data, pm_data)
-    strategy.link_features(
-        {**measure_paths, **derived_measure_paths},
-        fill_time_points,
-        feature_metadata,
-        pm_data,
+    process_obm(
+        pm_data=pm_data,
+        bd_data=bd_data,
+        resolution=resolution,
+        block_key=block_key,
+        time_point=pmc.OBM_TIME_POINT,
     )
 
 

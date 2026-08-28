@@ -1,4 +1,4 @@
-"""Derive the Open Building Map measures from the OBM covariate rasters.
+"""Build the Open Building Map features from the OBM covariate rasters.
 
 The covariate ships eight parent building types x two measures per block. This
 module collapses those into the six measures the model consumes, mirroring the
@@ -11,12 +11,11 @@ shape of `ghsl_r2023a` and `microsoft_v8`:
     {provider}_proportion_residential
     {provider}_p_observed
 
-Nothing here touches disk. `ObmStrategy` in `built.py` calls these functions and
-handles writing and the symlink fan-out, so OBM goes through the same
-built-version machinery as every other provider - which is also where the
-static-snapshot layout comes from: a single-epoch version fills every other time
-point by symlink automatically.
+OBM is a static snapshot, so the real files are written once into a canonical
+time point and every other time point links to them.
 """
+
+from pathlib import Path
 
 import numpy as np
 import rasterra as rt
@@ -195,3 +194,94 @@ def check_features(
         if max_diff > tolerance:
             msg = f"volume / density != height: max difference {max_diff}"
             raise ValueError(msg)
+
+
+def process_obm(
+    pm_data: PopulationModelData,
+    bd_data: BuildingDensityData,
+    resolution: str,
+    block_key: str,
+    time_point: str,
+) -> None:
+    """Build and link the OBM features for one block.
+
+    Takes plain arguments rather than a FeatureMetadata: everything OBM needs
+    comes from the covariate rasters themselves, so requiring the full metadata
+    would mean loading the modelling frame and a template tile per block for
+    nothing.
+    """
+    if time_point != pmc.OBM_TIME_POINT:
+        # OBM is a static snapshot. Every other time point is a symlink, created
+        # when the canonical time point runs.
+        return
+
+    covariate_root = pm_data.open_building_map_covariates / f"{resolution}m" / block_key
+    if not covariate_root.exists():
+        print(f"No OBM coverage for block {block_key}; skipping.")
+        return
+
+    print(f"Loading OBM parent densities for {block_key}")
+    density, land, template = load_parent_densities(pm_data, resolution, block_key)
+    built = land & (sum_parents(density, pmc.OBM_PARENTS) > 0)
+
+    print("Loading GHSL height")
+    height, n_imputed = load_height(bd_data, resolution, block_key, built)
+
+    print("Deriving features")
+    features, n_rescaled = derive_features(density, height)
+    check_features(features, height, land)
+
+    # The two numbers the covariate analysis quotes, reproducible from this run.
+    n_built = int(built.sum())
+    imputed_share = n_imputed / n_built if n_built else 0.0
+    print(
+        f"{block_key}: {n_built} built pixels, {n_rescaled} rescaled, "
+        f"{n_imputed} height-imputed ({imputed_share:.2%})"
+    )
+
+    # Every feature carries the same nan mask, matching GHSL.
+    shared_kwargs = {
+        "resolution": resolution,
+        "block_key": block_key,
+        "time_point": time_point,
+    }
+    feature_paths: dict[str, Path] = {}
+    for measure, array in features.items():
+        feature_name = f"{pmc.OBM_PROVIDER}_{measure}"
+        raster = rt.RasterArray(
+            np.where(land, array, np.nan).astype(np.float32),
+            transform=template.transform,
+            crs=template.crs,
+            no_data_value=np.nan,
+        )
+        pm_data.save_feature(raster, feature_name=feature_name, **shared_kwargs)
+        feature_paths[feature_name] = pm_data.feature_path(
+            feature_name=feature_name, **shared_kwargs
+        )
+
+    link_features(pm_data, feature_paths, resolution, block_key)
+
+
+def link_features(
+    pm_data: PopulationModelData,
+    feature_paths: dict[str, Path],
+    resolution: str,
+    block_key: str,
+) -> None:
+    """Link every other time point at the canonical files.
+
+    Each name is linked to its own target. The overture step links only the
+    un-prefixed name, which left every `log_*` symlink pointing at the non-log
+    file; iterating name/path pairs makes that mistake unrepresentable.
+    """
+    for feature_name, source_path in feature_paths.items():
+        for time_point in pmc.ALL_TIME_POINTS:
+            if time_point == pmc.OBM_TIME_POINT:
+                continue
+            pm_data.link_feature(
+                source_path=source_path,
+                feature_name=feature_name,
+                time_point=time_point,
+                block_key=block_key,
+                resolution=resolution,
+            )

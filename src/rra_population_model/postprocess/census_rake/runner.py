@@ -146,11 +146,30 @@ def check_complete(
 #              under-predicted and lean on the retry.)
 #   RUNTIME = margin * (floor + area term + perimeter term (convoluted CAN
 #             boundaries: high runtime at low memory)).
-# Coverage on the full run: 97.6% of tasks fit the first attempt; the 2.4% tail
-# (worst obs/request ratio 1.24) is fully covered by jobmon's default +50% retry
-# bump -- margins-not-maxima beats zero-retry tiers: 75% of the tiers' reserved
-# memory and 52% of their reserved runtime. SAU.8_1 (the 96 G kill, est ~115 GB)
-# gets a 166 G first attempt.
+#
+# The MEMORY coefficients below are the originals and should stay that way.
+# A recalibration was attempted on 2026-09-02 and reverted; recording why, so it
+# is not attempted again the same way.
+#
+# Fitting them to observed MaxRSS looks compelling - on a single run the fit went
+# from R^2 0.177 to 0.570, apparently cutting USA from 32 G to 17 G while raising
+# CAN. Checked against nine runs (90,989 validated attempts, 2026-06-18 to
+# 2026-08-24) it was strictly worse: measured against the smallest request each
+# task was ever observed to survive, the originals cover 98.2% and the "improved"
+# fit covered 67.7%.
+#
+# MaxRSS is not the need. For 9,308 tasks run at two materially different
+# requests, dRSS/dREQ was 0.353 - the same task given 8 G peaks near 3 G, given
+# 18 G peaks near 7 G. Page cache expands into whatever is offered, so fitting
+# reservations to RSS is a feedback loop that converges downward until tasks
+# start dying. Two further traps in the same data: slurm job ids were recycled
+# after the counter reset between 2026-07-06 and 2026-07-27, so old ids silently
+# resolve to unrelated jobs (validate on JobName *and* start date); and the
+# 2026-06-21T13:07 run requested a flat 54 G for everything and reports a 46 G
+# median RSS, which is cache occupancy, not demand.
+#
+# If these are revisited, the defensible target is the smallest request a task is
+# observed to survive, gathered across runs - not MaxRSS, and not one run.
 MEMORY_FLOOR_GB = 3.5
 MEMORY_PER_CENSUS_GB = 2.0
 MEMORY_PER_KKM2_BOX = 0.012
@@ -158,11 +177,32 @@ MEMORY_PER_KKM2_POPULATED = 0.24
 MEMORY_PER_KKM2_EMPTY = 0.04
 MEMORY_MARGIN = 1.15
 MEMORY_BOUNDS_GB = (8, 240)
-RUNTIME_FLOOR_MIN = 6.0
+#
+# RUNTIME: floor lowered from 6.0 (and the lower bound from 10m to 5m) on
+# 2026-09-02. This one does hold up, because elapsed time is not inflated by a
+# larger limit the way RSS is by a larger allocation - a job runs as long as it
+# runs, so measured elapsed is the true target.
+#
+# Over the same nine runs, 51% of tasks sat at the 10m floor and ran 1.2m
+# (p99 3.2m). Coverage 99.99% -> 99.89%, reserved runtime 4,052 -> 2,041
+# task-hours. The 20 tasks the lower floor starves ran ~9.2m against an 8m
+# grant and are caught by the retry.
+#
+# The slopes and margin are deliberately untouched: they are what protects the
+# long tail. A slope refit was tried and rejected - fitted on completed tasks
+# only, it would have handed GRL.3_1 116m and CHL C12401 17m, both of which
+# TIMED OUT at 240m.
+#
+# That tail is a task-splitting problem, not a sizing one. 99.9% of a run
+# finishes in 52 minutes; 19 tasks stretch it to 248. Of the 29 tasks predicted
+# over 60 minutes, 21 are a single admin (`most_detailed_units == 1`) and so
+# cannot be subdivided by `generate_census_inputs`, which only descends the admin
+# hierarchy. GRL.2_1 is one admin covering 924,000 km^2.
+RUNTIME_FLOOR_MIN = 2.0
 RUNTIME_PER_KKM2 = 0.09
 RUNTIME_PER_KKM_PERIM = 2.5
 RUNTIME_MARGIN = 1.7
-RUNTIME_BOUNDS_MIN = (10, 240)
+RUNTIME_BOUNDS_MIN = (5, 240)
 
 
 def build_task_resources(

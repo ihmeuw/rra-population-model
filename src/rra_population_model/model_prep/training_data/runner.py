@@ -150,6 +150,22 @@ def training_data_task(
     )
 
 
+# Per-task sizing from the tile neighbourhood was built, validated, and is
+# deliberately NOT wired in. `utils.build_neighbourhood_sizes` reproduces a
+# task's neighbourhood exactly (100.00% on 1,910 tiles) and predicts peak RSS
+# from it at R^2 0.942, so the geometry half is sound. The target was not: the
+# relation (a 4.76 GB floor plus 0.5932 GB per neighbouring tile) was fitted to
+# MaxRSS, and MaxRSS is not the memory a task needs. Measured on
+# census raking, where 9,308 tasks ran at two materially different requests,
+# dRSS/dREQ was 0.353 - the same task given 8 G peaks near 3 G and given 18 G
+# peaks near 7 G, because page cache expands into whatever is offered. Fitting
+# reservations to RSS is therefore a feedback loop that converges downward until
+# tasks start dying, and on census raking a fit built exactly this way scored
+# 67.7% coverage against the constants it was meant to improve on (98.2%).
+#
+# To turn it on, recalibrate against the smallest request each tile is observed
+# to survive, gathered over several runs - not MaxRSS, and not one run. There is
+# no such history yet because this scheme has never run.
 @click.command()
 @clio.with_resolution()
 @clio.with_output_directory(pmc.MODEL_ROOT)
@@ -174,17 +190,34 @@ def training_data(
             "output-dir": output_dir,
             "resolution": resolution,
         },
+        # Raised from 10G/5m after the 2026-09-02 run (jobmon
+        # model_prep_training_data/2026_09_02_11_14_36, 61,883 attempts).
+        #
+        # This rests on observed kills, not on a fit: 22,870 of 34,230 first
+        # attempts (67%) died OUT_OF_MEMORY at 10G, so the base was demonstrably
+        # below the typical task rather than merely under a modelled estimate.
+        # 20G covers 93.3% first time (16G: 90.9%, 24G: 94.6% - 20 is the knee).
+        # Runtime likewise: p90 4.0m and p99 11.2m against a 5m base produced
+        # 1,781 TIMEOUTs.
+        #
+        # It buys cluster resources rather than wall clock - the retries ran
+        # concurrently, so that run still finished in 1.40h - but it removes
+        # ~1,000 wasted task-hours and ~20,000 GB-hours, 46% of everything the
+        # run consumed.
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "10G",
-            "runtime": "5m",
+            "memory": "20G",
+            "runtime": "10m",
             "project": "proj_rapidresponse",
         },
-        max_attempts=5,
+        max_attempts=4,
+        # The old first rung (20G/10m) is now the base, so the ladder starts
+        # above it. The upper rungs still earn their place: measured p99 was
+        # 59.4G against a 127.9G maximum.
         resource_scales={
-            "memory":  iter([20     , 40     , 80     , 240    ]),  # G
-            "runtime": iter([10 * 60, 20 * 60, 30 * 60, 90 * 60]),  # seconds
+            "memory":  iter([40     , 80     , 240    ]),  # G
+            "runtime": iter([20 * 60, 30 * 60, 90 * 60]),  # seconds
         },
         log_root=pm_data.log_dir("model_prep_training_data"),
     )

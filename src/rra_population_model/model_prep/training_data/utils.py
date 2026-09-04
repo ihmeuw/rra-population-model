@@ -104,6 +104,83 @@ def build_arg_list(
     return to_run
 
 
+def build_neighbourhood_sizes(
+    resolution: str,
+    pm_data: PopulationModelData,
+    to_run: list[tuple[str, str, str]],
+) -> dict[str, int]:
+    """How many tiles each task will load, keyed by tile key.
+
+    NOT CURRENTLY CALLED. Kept because it is validated and the expensive half of
+    a per-task resource model; see the note above `training_data` in `runner.py`
+    for why the sizing built on top of it was backed out. Turning that on needs
+    a recalibration target, not a rewrite of this function.
+
+    A task's cost is set by its *tile neighbourhood* - every tile touching any
+    admin that touches its own tile, all of which `get_training_metadata` loads
+    - not by anything about the tile itself. Neighbourhoods run from 4 to 197
+    tiles, which is the whole 7 GB to 128 GB spread in peak memory.
+
+    Computed here rather than in the task because the resource request has to be
+    made at submission. It is the same quantity the task derives, not an
+    approximation: validated against 1,910 tiles from the 2026-09-02 run at
+    100.00% exact agreement.
+
+    The work is one spatial join per country, not one per task. A join of admins
+    against the modeling frame gives both directions at once - the tiles each
+    admin touches, and the admins each tile touches - after which a tile's
+    neighbourhood is the union of the tile sets of its own admins. Set
+    arithmetic, so 34,230 tasks cost no more than the join itself: measured at
+    55s for MEX and 225s for USA.
+
+    Note this loads a country's full max-level census (USA is 8.1M shapes) on
+    the submitting host, which is the memory high-water mark of the runner.
+    """
+    modeling_frame = pm_data.load_modeling_frame(resolution)
+    tiles = (
+        modeling_frame.drop_duplicates("tile_key")
+        .loc[:, ["tile_key", "geometry"]]
+        .reset_index(drop=True)
+    )
+
+    # A tile on a national border carries several entries and draws admins from
+    # all of them, so the census keys are collected across the whole list. 462 of
+    # the 34,230 tiles are USA/MEX border tiles; sizing them from the first entry
+    # alone under-predicts, which is the wrong direction to be wrong in.
+    census_keys = {
+        (iso3, time_point.split("q")[0])
+        for _, _, iso3_time_points in to_run
+        for iso3, time_point in (
+            entry.split(":") for entry in iso3_time_points.split(",")
+        )
+    }
+
+    contributions: dict[tuple[str, str], dict[str, frozenset[str]]] = {}
+    for iso3, year in sorted(census_keys):
+        admins = pm_data.load_census_data(iso3, year)
+        admins = admins.loc[
+            admins["admin_level"] == admins["admin_level"].max(), ["geometry"]
+        ].reset_index(drop=True)
+        joined = gpd.sjoin(admins, tiles, predicate="intersects", how="inner")
+        admin_tiles = joined.groupby(level=0)["tile_key"].apply(frozenset)
+        tile_admins = joined.reset_index().groupby("tile_key")["index"].apply(list)
+        contributions[(iso3, year)] = {
+            tile_key: frozenset().union(*(admin_tiles[i] for i in admin_ids))
+            for tile_key, admin_ids in tile_admins.items()
+        }
+
+    sizes = {}
+    for tile_key, _, iso3_time_points in to_run:
+        neighbourhood: set[str] = set()
+        for entry in iso3_time_points.split(","):
+            iso3, time_point = entry.split(":")
+            neighbourhood |= contributions[(iso3, time_point.split("q")[0])].get(
+                tile_key, frozenset()
+            )
+        sizes[tile_key] = len(neighbourhood)
+    return sizes
+
+
 def build_summary_people_per_structure(
     pm_data: PopulationModelData,
     resolution: str,

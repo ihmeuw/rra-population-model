@@ -111,20 +111,17 @@ def build_neighbourhood_sizes(
 ) -> dict[str, int]:
     """How many tiles each task will load, keyed by tile key.
 
-    NOT CURRENTLY CALLED. Kept because it is validated and the expensive half of
-    a per-task resource model; see the note above `training_data` in `runner.py`
-    for why the sizing built on top of it was backed out. Turning that on needs
-    a recalibration target, not a rewrite of this function.
+    Called by `build_task_resource_table`, not by the runner: the result is
+    checked in as `task_resources.parquet` so submission is a file read rather
+    than a ~6 minute computation.
 
     A task's cost is set by its *tile neighbourhood* - every tile touching any
     admin that touches its own tile, all of which `get_training_metadata` loads
-    - not by anything about the tile itself. Neighbourhoods run from 4 to 197
-    tiles, which is the whole 7 GB to 128 GB spread in peak memory.
+    - not by anything about the tile itself. Neighbourhoods run from 1 to 197
+    tiles, which is the whole 20 GB to 240 GB spread in what a task needs.
 
-    Computed here rather than in the task because the resource request has to be
-    made at submission. It is the same quantity the task derives, not an
-    approximation: validated against 1,910 tiles from the 2026-09-02 run at
-    100.00% exact agreement.
+    It is the same quantity the task derives, not an approximation: validated
+    against 1,910 tiles from the 2026-09-02 run at 100.00% exact agreement.
 
     The work is one spatial join per country, not one per task. A join of admins
     against the modeling frame gives both directions at once - the tiles each
@@ -627,6 +624,18 @@ def process_model_gdf(
         for measure in keep_measures:
             model_gdf[f"{measure}_{denominator}"] = denominator_df[measure]
 
+    # Assigned one column at a time, which raises a pandas PerformanceWarning
+    # about fragmentation. Left that way deliberately: the warning's suggested
+    # remedy costs more memory than it saves, and memory is what kills these
+    # tasks. Measured on a 200k-row, 250-column frame:
+    #
+    #   per-column insert (this)          0.55s   peak +0.40 GB
+    #   pd.concat                         1.36s   peak +0.80 GB
+    #   pd.concat(copy=False)             0.67s   peak +1.20 GB
+    #   model_gdf[cols] = frame           0.75s   peak +0.77 GB
+    #
+    # Every alternative materialises a second copy of the frame. Fragmentation
+    # is real but its cost here is a slower write, not a bigger peak.
     for feature in training_meta.features:
         model_gdf[f"admin_{feature}"] = (
             model_gdf[f"pixel_{feature}"] * model_gdf["admin_area_weight"]
@@ -710,3 +719,61 @@ def raster_from_pixel_feature(
         no_data_value=np.nan,
     )
     return feature_raster
+
+
+def build_task_resource_table(
+    resolution: str,
+    pm_data: PopulationModelData,
+    bands: list[tuple[int, int, int]],
+    observed: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Resolve the resource bands to one row per tile.
+
+    Writing this out is what lets the runner size tasks without computing
+    neighbourhoods at submission - a ~6 minute job that loads the full USA
+    max-level census on the submitting host. Regenerate when the modeling frame,
+    the census vintages, or the denominator list change; the runner warns when a
+    tile it is about to submit is missing from the table.
+
+    Parameters
+    ----------
+    bands
+        ``(max neighbourhood size, memory GB, runtime minutes)``, ascending.
+    observed
+        Optional measurements from a previous run, indexed by tile key with
+        columns ``obs_mem_gb`` (the smallest request the tile was seen to
+        survive) and ``obs_runtime_min`` (its longest successful elapsed).
+
+        This is the point of the table rather than a bare formula: a band is a
+        prediction, an observation is what actually happened, and where they
+        disagree the observation wins. The smallest *surviving request* is the
+        target rather than peak RSS - RSS measures what a task was given, not
+        what it needed, so fitting reservations to it converges downward until
+        tasks start dying.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``tile_key``, ``neighbourhood``, ``memory_gb``, ``runtime_min``.
+    """
+    to_run = build_arg_list(resolution, pm_data)
+    sizes = build_neighbourhood_sizes(resolution, pm_data, to_run)
+    table = pd.DataFrame(
+        {"tile_key": list(sizes), "neighbourhood": list(sizes.values())}
+    )
+    table["memory_gb"] = [
+        next(m for limit, m, _ in bands if n <= limit) for n in table["neighbourhood"]
+    ]
+    table["runtime_min"] = [
+        next(r for limit, _, r in bands if n <= limit) for n in table["neighbourhood"]
+    ]
+
+    if observed is not None:
+        obs = table["tile_key"].map(observed["obs_mem_gb"]).fillna(0)
+        table["memory_gb"] = np.maximum(table["memory_gb"], obs).astype(int)
+        # Double what was actually needed: elapsed time varies with cluster load
+        # in a way the band cannot see, so a tile that once ran long gets slack.
+        ran = np.ceil(table["tile_key"].map(observed["obs_runtime_min"]).fillna(0) * 2)
+        table["runtime_min"] = np.maximum(table["runtime_min"], ran).astype(int)
+
+    return table.sort_values("tile_key").reset_index(drop=True)

@@ -13,7 +13,56 @@ from shapely import area, box, intersection, set_precision
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
-STEP_LIMIT = 1.0025  # 1% per year
+# v3-graded temporal mechanism constants. All three are measured, not chosen --
+# derivations and evidence in .claude/census_rake_temporal/DESIGN.md:
+#   K_PERSIST -- quarters a newly-appearing pixel must stay ON before its
+#     population is creditable. Genuine construction accumulates and never
+#     reverts; detector flicker reverts. Two independent measurements agree on
+#     ~2: the separation point of on-run-length distributions for reverting vs
+#     persisting pixels, and the buildings-precede-people occupancy lag.
+#   ANCHOR_WINDOW -- quarters starting at the census time point in which an ON
+#     pixel counts as existing stock; "new" requires OFF throughout the window.
+#     Set by the measured flicker-misclassification vs missed-construction
+#     curves (population-costed crossover at W~2-3 with phantom the costlier
+#     error class) and brackets census reference dates (US April 1 = q1/q2).
+#   RF_LAMBDA_PERSONS -- partial-pooling mass for the parent rate, denominated
+#     in CENSUS PERSONS so it is invariant to the raw-prediction unit scale
+#     (which shifts across model retrains -- e.g. the log-occupancy retrain
+#     shrank units by ~two orders of magnitude; ~150x measured for USA/KOR):
+#         RF_p = (C_p + LAMBDA) / (M_p + LAMBDA / RF_country)
+#     i.e. the prior contributes LAMBDA people at the national rate. Below that
+#     parent mass the parent's own rate estimate is noisier than the prior
+#     (setting rule: split-half sampling noise = cross-parent dispersion).
+#     800 persons restates the validated harness value (lambda = 100 model
+#     units on the 2026_05_06 run, where national rates were 7.5 (USA) to
+#     9.3 (KOR) persons/unit -> 750-930 persons).
+K_PERSIST = 2
+ANCHOR_WINDOW = 2
+RF_LAMBDA_PERSONS = 800.0
+# One-sided growth-density cap (adopted 2026-08-24 for the public release):
+# a unit's implied mean people-per-ON-pixel may not exceed the q99 of its
+# parent's ESTABLISHED family (census / on-pixels at the anchor, over
+# well-measured units), unless the census itself put it higher --
+# y <= max(C, q99 * n_on(t)). Never cuts below census (anchor exactness and
+# at-anchor extremes untouched); only bounds construction-channel credit.
+# Measured on the US audit (production semantics, 2026q1): caps 1,440 units,
+# removing 1.32M of 11.1M credit (11.8%), concentrated in the density-flagged
+# class whose predictions carry ~4.5x normal mass per new pixel (upstream
+# building-layer artifact; the cap self-adjusts as upstream QC improves since
+# the family is recomputed per run).
+# Small families cannot estimate a tail quantile: subsampled q99 reads ~35%
+# low at n=30 and ~21% low at n=100 (downsampling 250 large counties), so
+# below DENSITY_CAP_MIN_UNITS the bound is DENSITY_CAP_SMALL_FAMILY_MULT x the
+# family MAX instead -- a statistic that exists at any size and degrades
+# gracefully to a self-cap for single-unit parents (which previously had no
+# bound at all). k=3 is the ~p75 of the measured ratio q99_full/max(n) over
+# the small-family size range (median 1.7-3.1 at n=3-15); measured impact of
+# the whole hybrid rule vs the old (q99, min 30): identical on USA/KOR/ESP
+# (zero additional caps) -- its reach is the single-unit-parent censuses.
+DENSITY_CAP_QUANTILE = 0.99
+DENSITY_CAP_MIN_UNITS = 100
+DENSITY_CAP_SMALL_FAMILY_MULT = 3.0
+DENSITY_CAP_MIN_CENSUS = 5.0
 
 ADMIN_EXCLUSIONS = {
     "ARG": [
@@ -248,8 +297,21 @@ def process_census_data(
     pm_data: PopulationModelData,
     task_map: gpd.GeoSeries,
     model_time_points: list[str],
-) -> tuple[pd.DataFrame | None, pd.DataFrame | None, rt.RasterArray]:
+    pooling_level: int,
+) -> tuple[
+    pd.DataFrame | None,
+    pd.DataFrame | None,
+    rt.RasterArray,
+    "pd.Series[Any] | None",
+    "pd.Series[Any] | None",
+]:
     """Build the census/pixel overlay skeleton and per-pixel prediction table.
+
+    Also returns, in census row order (the order that defines the overlay
+    skeleton's integer shape codes): the ``shape_id`` strings and each unit's
+    semantic pooling-parent id (``path_to_top_parent`` element at
+    ``pooling_level``), so callers can label per-shape outputs and look up
+    pooled rates without re-reading the census.
 
     Assumes the prediction nodata footprint (the water mask) is time-invariant
     across ``model_time_points``. That mask is produced upstream in the
@@ -282,6 +344,8 @@ def process_census_data(
 
     overlay_skeleton: pd.DataFrame | None = None
     prediction_data: pd.DataFrame | None = None
+    shape_ids: "pd.Series[Any] | None" = None
+    pooling_ids: "pd.Series[Any] | None" = None
     if task_map["population_total"] == 0:
         # Footprint from one time point only; relies on the time-invariant water
         # mask documented in this function's docstring.
@@ -331,8 +395,15 @@ def process_census_data(
         census_data = census_data.loc[
             census_data["path_to_top_parent"].apply(lambda x: x.split(",")[task_map["task_parent_level"]] == task_map["task_parent_id"])
         ]
+        # Row order defines the integer shape codes used everywhere downstream;
+        # capture ids and semantic pooling parents before the column filter.
+        pooling_ids = (
+            census_data["path_to_top_parent"].str.split(",").str[pooling_level]
+            .reset_index(drop=True)
+        )
         census_data = census_data.loc[:, ["shape_id", "population_total", "geometry"]]
         census_data = census_data.to_crs(modeling_frame.crs)
+        shape_ids = census_data["shape_id"].reset_index(drop=True)
 
         census_data["geometry"] = census_data["geometry"].map(lambda g: set_precision(g, 0.01))
 
@@ -364,102 +435,69 @@ def process_census_data(
                 if model_time_point == model_time_points[0]
                 else load_prediction(model_time_point)
             )
-            pixel_populations[f"pixel_population_{model_time_point}"] = (
-                prediction_raster.to_numpy().flatten()[covered_pixel_ids]
-            )
+            covered_values = prediction_raster.to_numpy().flatten()[covered_pixel_ids]
+            if np.nanmin(covered_values) < 0:
+                # Negative predictions would make w = built/(built+base) exceed
+                # 1 without bound downstream; nothing upstream asserts this.
+                msg = f"Negative raw predictions at {model_time_point}"
+                raise ValueError(msg)
+            pixel_populations[f"pixel_population_{model_time_point}"] = covered_values
         prediction_data = pd.DataFrame(pixel_populations, index=covered_pixel_ids)
         prediction_data.index.name = "pixel_id"
         prediction_data = prediction_data.reset_index()
 
-    return overlay_skeleton, prediction_data, template_raster
+    return overlay_skeleton, prediction_data, template_raster, shape_ids, pooling_ids
 
 
-def calculate_time_point_raking_factor(
-    shapes: pd.DataFrame,
-    sorted_model_time_points: list[str],
-    step: int,
-    rf_anchor: npt.NDArray[np.floating[Any]],
-) -> tuple[pd.DataFrame, npt.NDArray[np.floating[Any]]]:
-    """Set ``raking_factor_<model_time_point>`` on the per-shape ``shapes`` table.
+def margin_time_points(
+    write_time_points: list[str],
+    census_time_point: str,
+    available_time_points: list[str],
+) -> list[str]:
+    """Time points the v3 pixel margins must be computed over.
 
-    Pure per-shape math (one row per census shape): the step-limit logic only ever
-    uses shape_population / raking_factor / population_total, which are constant
-    within a shape. The caller applies the resulting factor per pixel.
+    The written window (this census's weighted time points) extended with
+    ``K_PERSIST`` quarters before its start (run-length warm-up, so a pixel
+    already persisting when the window opens is credited from the first written
+    time point) and enough after the census time point to complete the anchor
+    window. Clipped to the time points that actually have predictions.
     """
-    model_time_point = sorted_model_time_points[step]
-    prev_model_time_point = sorted_model_time_points[step - 1]
-
-    # Find the closest non-zero previous time point as the step-limit reference.
-    # A zero shape_population reference collapses raked_pop_prev to zero, which
-    # would force raked_pop_t to zero even after predictions recover.
-    shape_population_prev = shapes[f"shape_population_{prev_model_time_point}"].to_numpy(copy=True)
-    raking_factor_prev = shapes[f"raking_factor_{prev_model_time_point}"].to_numpy(copy=True)
-    for earlier_tp in reversed(sorted_model_time_points[:step - 1]):
-        still_zero = (shape_population_prev == 0) & (shapes[f"shape_population_{model_time_point}"].to_numpy() != 0)
-        if not still_zero.any():
-            break
-        shape_population_prev[still_zero] = shapes.loc[still_zero, f"shape_population_{earlier_tp}"].to_numpy(copy=True)
-        raking_factor_prev[still_zero] = shapes.loc[still_zero, f"raking_factor_{earlier_tp}"].to_numpy(copy=True)
-
-    # Step-limit bounds on raking factor:
-    # raked_pop_t = shape_pop_t * rf_t must stay in [raked_pop_prev/STEP_LIMIT, raked_pop_prev*STEP_LIMIT]
-    # where raked_pop_prev = shape_pop_prev * rf_prev (from the closest non-zero reference).
-    prev_mask = np.isfinite(raking_factor_prev)
-    raked_pop_prev = np.full_like(shape_population_prev, np.nan)
-    raked_pop_prev[prev_mask] = shape_population_prev[prev_mask] * raking_factor_prev[prev_mask]
-
-    # Only apply bounds when both the reference and the current prediction are valid.
-    shape_pop_current = shapes[f"shape_population_{model_time_point}"].to_numpy()
-    valid_ref = (shape_pop_current > 0) & np.isfinite(raked_pop_prev)
-    rf_lower = np.full_like(raking_factor_prev, 0.0)
-    rf_lower[valid_ref] = safe_divide(
-        raked_pop_prev[valid_ref],
-        shape_pop_current[valid_ref] * STEP_LIMIT
-    )
-    rf_upper = np.full_like(raking_factor_prev, np.inf)
-    rf_upper[valid_ref] = safe_divide(
-        raked_pop_prev[valid_ref] * STEP_LIMIT,
-        shape_pop_current[valid_ref]
-    )
-    # Absolute cap: raked_pop_t <= step * STEP_LIMIT * census_population.
-    # Prevents unbounded compounding over many steps.
-    census_pop = shapes["population_total"].astype(np.float32).to_numpy()
-    rf_upper_abs = np.full_like(raking_factor_prev, np.inf)
-    rf_upper_abs[valid_ref] = safe_divide(
-        census_pop[valid_ref] * (step * STEP_LIMIT),
-        shape_pop_current[valid_ref]
-    )
-    rf_upper = np.minimum(rf_upper, rf_upper_abs)
-
-    # Target: rf_anchor, the first finite raking factor encountered stepping away from
-    # the census time point (passed in and maintained by the caller). Each step aims for
-    # this value so the raking factor converges back to the census-consistent level after
-    # large model jumps instead of staying permanently offset.
-    # Where rf_anchor is still inf/nan (no finite step seen yet), fall back to
-    # raking_factor_direct so zero-to-nonzero transitions are treated independently.
-    valid_direct = shape_pop_current > 0
-    raking_factor_direct = np.full_like(raking_factor_prev, np.inf)
-    raking_factor_direct[valid_direct] = safe_divide(
-        shapes["population_total"].astype(np.float32).to_numpy()[valid_direct],
-        shape_pop_current[valid_direct],
-    )
-    valid_anchor = np.isfinite(rf_anchor)
-    rf_target = np.where(valid_anchor, rf_anchor, raking_factor_direct)
-    shapes[f"raking_factor_{model_time_point}"] = np.clip(rf_target, rf_lower, rf_upper)
-
-    # Replace any remaining inf/nan (shape_pop=0 at this step) with raking_factor_direct,
-    # which will itself be inf when shape_pop=0 — those get zeroed out later.
-    invalid_rf = ~np.isfinite(shapes[f"raking_factor_{model_time_point}"])
-    shapes.loc[invalid_rf, f"raking_factor_{model_time_point}"] = raking_factor_direct[invalid_rf]
-
-    # Update anchor: fill in shapes where we just computed the first finite raking factor.
-    new_rf = shapes[f"raking_factor_{model_time_point}"].to_numpy()
-    rf_anchor = np.where(~np.isfinite(rf_anchor) & np.isfinite(new_rf), new_rf, rf_anchor)
-
-    return shapes, rf_anchor
+    missing = set(write_time_points) - set(available_time_points)
+    if missing:
+        msg = (
+            f"Written time points {sorted(missing)} have no raw predictions; "
+            "refusing to build a margin window over missing inputs."
+        )
+        raise ValueError(msg)
+    ordered = sorted(set(available_time_points) | set(write_time_points))
+    first_i = ordered.index(sorted(write_time_points)[0])
+    last_i = ordered.index(sorted(write_time_points)[-1])
+    tc_i = ordered.index(census_time_point)
+    lo = max(0, first_i - K_PERSIST)
+    hi = min(len(ordered) - 1, max(last_i, tc_i + ANCHOR_WINDOW - 1))
+    extended = [
+        tp for tp in ordered[lo : hi + 1] if tp in set(available_time_points)
+    ]
+    return sorted(set(extended) | set(write_time_points))
 
 
-def compute_shape_raking_factors(
+def anchor_window(census_time_point: str, time_points: list[str]) -> list[str]:
+    """The ANCHOR_WINDOW quarters that define existing stock for one census.
+
+    Starts at the census time point; falls back to the preceding quarter when
+    the census sits at the series end. ``time_points`` must be chronologically
+    sorted and contain the census time point. Shared by compute_shape_values
+    and the census_rf pre-stage so both classify stock — and measure the
+    density-cap footprint — over identical quarters.
+    """
+    tc_i = time_points.index(census_time_point)
+    window = time_points[tc_i : tc_i + ANCHOR_WINDOW]
+    if len(window) < ANCHOR_WINDOW and tc_i > 0:
+        window = time_points[max(0, tc_i - (ANCHOR_WINDOW - 1)) : tc_i + 1]
+    return window
+
+
+def compute_shape_values(
     shape_id: npt.NDArray[np.integer[Any]],
     coverage: npt.NDArray[np.floating[Any]],
     population_total: npt.NDArray[np.floating[Any]],
@@ -467,19 +505,58 @@ def compute_shape_raking_factors(
     pred_row: npt.NDArray[np.integer[Any]],
     census_time_point: str,
     model_time_points: list[str],
-) -> pd.DataFrame:
-    """Per-shape raking factor for each model time point.
+    write_time_points: list[str],
+    pooling_ids: "pd.Series[Any]",
+    rf_by_parent: "pd.Series[Any]",
+    bounds_by_parent: "pd.Series[Any]",
+    rf_country: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Per-shape v3-graded populations and effective raking factors.
 
-    Reduces the (covered-pixel) overlay to one row per census shape, runs the
-    step-limit raking there, and returns a table indexed by the integer shape code
-    with a ``raking_factor_<model_time_point>`` column per time point. The caller maps
-    these back onto pixels. This keeps the raking working set at n_shapes x n_tps
-    instead of covered_pixels x (~5 x n_tps).
+    The v3 mechanism ("flat + persistent-pixel construction channel", see
+    .claude/census_rake_temporal/DESIGN.md), per census unit i with census C_i
+    anchored at the census time point t_c:
 
-    ``shape_id``, ``coverage`` and ``population_total`` are per-(covered-pixel-row)
-    arrays; ``pred_row`` maps each of those rows to its row in ``prediction_data`` so
-    the per-time-point pixel populations can be gathered without a merge.
+        y_i(t)     = gate_i(t) * [ C_i + RF_p * built_i(t) * w_i(t) ]
+        built_i(t) = population in pixels OFF throughout the anchor window
+                     [t_c .. t_c+W-1] and ON >= K_PERSIST consecutive quarters
+        w_i(t)     = built_i(t) / (built_i(t) + base_i),  base_i = pred_i(t_c)
+        RF_p       = (C_p + LAMBDA) / (M_p(t_c) + LAMBDA / RF_country)
+                     per SEMANTIC POOLING PARENT p (one admin level above the
+                     census's most-detailed, capped at admin2; national when
+                     admin1 is most detailed) -- precomputed by the census_rf
+                     pre-stage and passed in as ``rf_by_parent``; units map to
+                     parents via ``pooling_ids`` (census row order, from
+                     path_to_top_parent). LAMBDA = RF_LAMBDA_PERSONS.
+        gate_i(t)  = 1{unit has any covered pixel with population at t}
+
+    The growth-density cap families use the SAME pooling parents (one "parent"
+    for rate and bound); like RF_p, the per-parent bound is computed over the
+    whole census by the pre-stage (``bounds_by_parent``) and looked up here,
+    so task boundaries never truncate a family.
+
+    Established stock is flat at census level (the model's per-unit growth
+    signal has no out-of-sample skill); only persistent new construction earns
+    credit, graded by how new the unit's stock is, and only FORWARD of the
+    anchor (t >= t_c; earlier time points are flat at C), bounded by the
+    one-sided growth-density cap (y <= max(C, q99_parent * n_on(t)); see the
+    DENSITY_CAP_* constants). Exact at the anchor by algebra (built(t_c) = 0,
+    and the cap never cuts below C). Census-0 units use the same channel.
+    There is no step limit or per-unit rate division anywhere.
+
+    ``model_time_points`` is the (chronological) margin window -- the written
+    time points plus warm-up/anchor-window extensions -- over which pixel
+    run-lengths are tracked; ``write_time_points`` are the time points that get
+    factors/outputs. Returns ``(factors, shape_table)``: ``factors`` is indexed
+    by the integer shape code with one finite float64
+    ``raking_factor_<tp>`` column per written time point (y / predicted; 0 for
+    ungated shapes) for the caller to map onto pixels -- the same contract the
+    incumbent mechanism satisfied, so the pixel apply is unchanged and
+    within-unit allocation follows the prediction at t. ``shape_table`` carries
+    the per-shape quantities (census, base, built, y, on-pixel counts) for
+    persistence.
     """
+    write_set = set(write_time_points)
     # per-shape census population (constant within a shape) sets the shape order/index
     shapes = pd.Series(population_total).groupby(shape_id).first().to_frame("population_total")
     for model_time_point in model_time_points:
@@ -489,37 +566,124 @@ def compute_shape_raking_factors(
             pd.Series(covered).groupby(shape_id).sum()
         )
 
-    shapes[f"raking_factor_{census_time_point}"] = safe_divide(
-        shapes["population_total"].astype(np.float32),
-        shapes[f"shape_population_{census_time_point}"],
+    n_codes = int(shape_id.max()) + 1
+    code_index = shapes.index.to_numpy()
+
+    def by_shape(weights: npt.NDArray[np.floating[Any]]) -> npt.NDArray[np.floating[Any]]:
+        summed: npt.NDArray[np.floating[Any]] = np.bincount(
+            shape_id, weights=weights, minlength=n_codes
+        )[code_index]
+        return summed
+
+    # Anchor-window classification: a pixel is existing stock if ON at any of
+    # the anchor-window quarters (see anchor_window); "new" requires OFF
+    # throughout the window.
+    window = anchor_window(census_time_point, model_time_points)
+    on_window = np.zeros(len(pred_row), dtype=bool)
+    for tp in window:
+        on_window |= (
+            prediction_data[f"pixel_population_{tp}"].to_numpy()[pred_row] * coverage
+        ) > 0
+    new_px = ~on_window
+
+    # K-consecutive-quarter persistence, tracked chronologically over the full
+    # margin window (construction accumulates and never reverts; flicker does).
+    run: npt.NDArray[np.int16] = np.zeros(len(pred_row), dtype=np.int16)
+    built: dict[str, npt.NDArray[np.floating[Any]]] = {}
+    n_on: dict[str, npt.NDArray[np.floating[Any]]] = {}
+    for tp in model_time_points:
+        covered_t = prediction_data[f"pixel_population_{tp}"].to_numpy()[pred_row] * coverage
+        on_t = covered_t > 0
+        run = np.where(on_t, run + 1, 0).astype(np.int16)
+        if tp in write_set:
+            persist = run >= K_PERSIST
+            built[tp] = by_shape(np.where(new_px & persist, covered_t, 0.0))
+            n_on[tp] = by_shape(on_t.astype(np.float64))
+
+    census = shapes["population_total"].to_numpy(dtype=np.float64)
+    base = shapes[f"shape_population_{census_time_point}"].to_numpy(dtype=np.float64)
+
+    # Growth-density cap bound: precomputed per pooling parent by the census_rf
+    # pre-stage over the WHOLE census (q99 of the parent's established density
+    # family, k x family-max for small families; see the DENSITY_CAP_*
+    # provenance comment and DESIGN section 6) and looked up here exactly like
+    # RF_p. A parent with no well-measured units -- or missing from the table
+    # -- is uncapped.
+    parent_ids = pooling_ids.to_numpy()[code_index]
+    bound_arr = (
+        pd.Series(parent_ids).map(bounds_by_parent).fillna(np.inf)
+        .to_numpy(dtype=np.float64)
     )
 
-    distances = [
-        (int(census_time_point.split("q")[0]) + int(census_time_point.split("q")[1]) / 4)
-        -
-        (int(model_time_point.split("q")[0]) + int(model_time_point.split("q")[1]) / 4)
-        for model_time_point in model_time_points
-    ]
-    pre_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points)) if i[0] >= 0]
-    post_sorted_model_time_points = [i[1] for i in sorted(zip(distances, model_time_points), reverse=True) if i[0] <= 0]
-    # rf_anchor: per-shape target raking factor, initialized from the census time
-    # point and updated to the first finite value encountered as we step away from it.
-    rf_anchor_init = shapes[f"raking_factor_{census_time_point}"].to_numpy().copy()
-    for sorted_model_time_points in [pre_sorted_model_time_points, post_sorted_model_time_points]:
-        rf_anchor = rf_anchor_init.copy()
-        for i in range(1, len(sorted_model_time_points)):
-            shapes, rf_anchor = calculate_time_point_raking_factor(
-                shapes,
-                sorted_model_time_points,
-                i,
-                rf_anchor,
-            )
+    # Per-unit pooled rate: look up the unit's semantic pooling parent in the
+    # pre-stage table. A parent missing from the table (shouldn't happen --
+    # same census file feeds both) falls back to the national rate.
+    rf_arr = (
+        pd.Series(parent_ids).map(rf_by_parent)
+        .fillna(rf_country if rf_country > 0 else 0.0)
+        .to_numpy(dtype=np.float64)
+    )
 
-    raking_factor_cols = [f"raking_factor_{model_time_point}" for model_time_point in model_time_points]
-    for col in raking_factor_cols:
-        shapes.loc[~np.isfinite(shapes[col]), col] = 0
+    # Assemble both frames from column dicts in one construction (repeated
+    # column insertion fragments the frame and warns on wide windows).
+    factor_cols: dict[str, npt.NDArray[np.floating[Any]]] = {}
+    table_cols: dict[str, npt.NDArray[Any]] = {
+        "pooling_parent_id": parent_ids,
+        "census_population": census,
+        "base_population": base,
+        "rf_parent": rf_arr,
+        "density_bound": bound_arr,
+    }
+    for tp in write_time_points:
+        predicted_t = shapes[f"shape_population_{tp}"].to_numpy(dtype=np.float64)
+        built_t = built[tp]
+        weight = np.where(built_t + base > 0, built_t / np.maximum(built_t + base, 1e-300), 0.0)
+        # FORWARD-ONLY channel: credit applies at t >= t_c; before the anchor
+        # the unit is flat at C. Pre-anchor "built" (stock present earlier but
+        # gone by the anchor window) is dominated by detector reversals, and
+        # crediting it degraded held-out accuracy everywhere it acted
+        # (adversarial audit 2026-08-21, verified: ESP backcast touched-stratum
+        # wMAPE 10.18->11.86; KOR +0.86/+0.32). It also removes the artificial
+        # series-start credit step from run-length warm-up truncation. built_t
+        # is still persisted in the shape table as a diagnostic.
+        credit_t = rf_arr * built_t * weight if tp >= census_time_point else 0.0
+        y_t = np.where(predicted_t > 0, census + credit_t, 0.0)
+        # One-sided per-parent cap: bounds credit only; max(C, .) never cuts
+        # below census, so the anchor and at-anchor extremes are untouched.
+        finite_bound = np.isfinite(bound_arr)
+        bounded_rate = np.where(finite_bound, bound_arr, 0.0)
+        allowed = np.where(
+            finite_bound, np.maximum(census, bounded_rate * n_on[tp]), np.inf
+        )
+        y_t = np.minimum(y_t, allowed)
+        # Effective factor: exact reparameterization of y for the per-pixel
+        # apply (pixel = pred * coverage * factor), so unit totals equal y and
+        # within-unit allocation follows the prediction. Finite everywhere:
+        # y > 0 requires predicted_t > 0 (the gate). float64 -- y over a tiny
+        # prediction is large (it cancels in the apply) and must not saturate.
+        factor_cols[f"raking_factor_{tp}"] = safe_divide(y_t, predicted_t)
+        table_cols[f"shape_population_{tp}"] = predicted_t
+        table_cols[f"built_{tp}"] = built_t
+        table_cols[f"raked_{tp}"] = y_t
+        table_cols[f"n_on_{tp}"] = n_on[tp].astype(np.int32)
+    factors = pd.DataFrame(factor_cols, index=shapes.index)
+    shape_table = pd.DataFrame(table_cols, index=shapes.index)
 
-    return shapes[raking_factor_cols]
+    # Exact at the anchor by algebra (built(t_c) = 0 by construction); a cheap
+    # guard against regressions in the margin bookkeeping.
+    gated = base > 0
+    anchor_error = abs(
+        shape_table[f"raked_{census_time_point}"].to_numpy()[gated].sum()
+        - census[gated].sum()
+    )
+    if anchor_error > max(1e-6 * census[gated].sum(), 1e-6):
+        msg = (
+            f"v3 raked population is not exact at the census anchor "
+            f"{census_time_point}: |error| = {anchor_error:.6g} people"
+        )
+        raise ValueError(msg)
+
+    return factors, shape_table
 
 
 def build_overlay_skeleton(
@@ -665,18 +829,25 @@ def rake(
     template_raster: rt.RasterArray,
     census_time_point: str,
     model_time_points: list[str],
-) -> Iterator[rt.RasterArray]:
-    """Yield one raked raster per model time point, in ``model_time_points`` order.
+    write_time_points: list[str],
+    pooling_ids: "pd.Series[Any]",
+    rf_by_parent: "pd.Series[Any]",
+    bounds_by_parent: "pd.Series[Any]",
+    rf_country: float,
+) -> tuple[pd.DataFrame, Iterator[rt.RasterArray]]:
+    """Per-shape v3 table plus one raked raster per written time point.
 
     Takes the overlay skeleton already built by ``process_census_data`` (so the
-    expensive border overlay isn't recomputed) and attaches the per-time-point
-    pixel populations to it here.
+    expensive border overlay isn't recomputed). ``model_time_points`` is the
+    margin window the mechanism needs (see ``margin_time_points``);
+    ``write_time_points`` are the census's weighted time points that get
+    rasters, yielded in that order.
 
-    A generator (not a list) so the caller can save and free each raster before
-    the next is built: peak output memory is a single box-sized raster instead of
-    ``n_time_points`` of them. The per-pixel raked values are summed once (over the
-    covered pixels only); only the final reshape to the full raster grid is done
-    one time point at a time.
+    Rasters come as a generator (not a list) so the caller can save and free
+    each one before the next is built: peak output memory is a single box-sized
+    raster instead of ``n_time_points`` of them. The per-shape mechanism runs
+    once up front (it also carries the anchor-exactness guard); only the
+    per-pixel apply and the reshape to the full grid happen per time point.
     """
     shape_id = overlay_skeleton["shape_id"].to_numpy()
     population_total = overlay_skeleton["population_total"].to_numpy()
@@ -696,40 +867,44 @@ def rake(
     pred_pixel = prediction_data["pixel_id"].to_numpy()
     pred_row = np.searchsorted(pred_pixel, skel_pixel)
 
-    # Raking factors are computed on a small per-shape table; the per-pixel apply
-    # (covered_population * raking_factor -> sum per pixel) is done one time point at
+    # The mechanism runs on a small per-shape table; the per-pixel apply
+    # (covered_population * factor -> sum per pixel) is done one time point at
     # a time below so no covered_pixels x n_tps intermediate is ever materialized.
-    shape_raking_factors = compute_shape_raking_factors(
+    shape_factors, shape_table = compute_shape_values(
         shape_id, coverage, population_total, prediction_data, pred_row,
-        census_time_point, model_time_points,
+        census_time_point, model_time_points, write_time_points,
+        pooling_ids, rf_by_parent, bounds_by_parent, rf_country,
     )
 
-    shape_id_series = pd.Series(shape_id)
-    # Factorize pixel_id once (values are flattened raster positions). Per time
-    # point we then sum-per-pixel with np.bincount and scatter into the box grid --
-    # avoiding a groupby (re-hash) and a full-box reindex on every time point, which
-    # is what made large admins slow.
-    codes, covered_positions = pd.factorize(skel_pixel, sort=True)
-    n_covered = len(covered_positions)
-    size = template_raster.size
-    for model_time_point in model_time_points:
-        raking_factor = shape_id_series.map(
-            shape_raking_factors[f"raking_factor_{model_time_point}"]
-        ).to_numpy()
-        pixel_population = prediction_data[f"pixel_population_{model_time_point}"].to_numpy()[pred_row]
-        raked_pixel_population = pixel_population * coverage * raking_factor
-        per_pixel = np.bincount(
-            codes,
-            weights=np.nan_to_num(raked_pixel_population),
-            minlength=n_covered,
-        )
-        raked_population = np.full(size, np.nan, dtype=np.float32)
-        raked_population[covered_positions] = per_pixel
-        raked_data = raked_population.reshape(template_raster.shape)
-        raked_raster = rt.RasterArray(
-            data=raked_data,
-            transform=template_raster.transform,
-            crs=template_raster.crs,
-            no_data_value=np.nan,
-        )
-        yield trim_null_edges(raked_raster)
+    def raster_iter() -> Iterator[rt.RasterArray]:
+        shape_id_series = pd.Series(shape_id)
+        # Factorize pixel_id once (values are flattened raster positions). Per time
+        # point we then sum-per-pixel with np.bincount and scatter into the box grid --
+        # avoiding a groupby (re-hash) and a full-box reindex on every time point, which
+        # is what made large admins slow.
+        codes, covered_positions = pd.factorize(skel_pixel, sort=True)
+        n_covered = len(covered_positions)
+        size = template_raster.size
+        for model_time_point in write_time_points:
+            raking_factor = shape_id_series.map(
+                shape_factors[f"raking_factor_{model_time_point}"]
+            ).to_numpy()
+            pixel_population = prediction_data[f"pixel_population_{model_time_point}"].to_numpy()[pred_row]
+            raked_pixel_population = pixel_population * coverage * raking_factor
+            per_pixel = np.bincount(
+                codes,
+                weights=np.nan_to_num(raked_pixel_population),
+                minlength=n_covered,
+            )
+            raked_population = np.full(size, np.nan, dtype=np.float32)
+            raked_population[covered_positions] = per_pixel
+            raked_data = raked_population.reshape(template_raster.shape)
+            raked_raster = rt.RasterArray(
+                data=raked_data,
+                transform=template_raster.transform,
+                crs=template_raster.crs,
+                no_data_value=np.nan,
+            )
+            yield trim_null_edges(raked_raster)
+
+    return shape_table, raster_iter()

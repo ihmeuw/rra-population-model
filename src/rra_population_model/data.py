@@ -967,6 +967,82 @@ class PopulationModelData:
         )
         return census_tasks
 
+    def census_rf_prior_path(
+        self, iso3: str, census_time_point: str, model_spec: "ModelSpecification"
+    ) -> Path:
+        root = self.raked_census_root(model_spec.resolution, model_spec.model_version)
+        return root / "rf_prior" / f"{iso3}_{census_time_point}.parquet"
+
+    def save_census_rf_prior(
+        self,
+        rf_prior: pd.DataFrame,
+        iso3: str,
+        census_time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> None:
+        """Persist one census's RF pooling prior (written by the census_rf
+        pre-stage): per task parent M_p at the census time point, plus the
+        country aggregates and RF_country the census_rake tasks pool toward."""
+        path = self.census_rf_prior_path(iso3, census_time_point, model_spec)
+        mkdir(path.parent, parents=True, exist_ok=True)
+        rf_prior.to_parquet(path)
+
+    def load_census_rf_prior(
+        self,
+        iso3: str,
+        census_time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> pd.DataFrame:
+        path = self.census_rf_prior_path(iso3, census_time_point, model_spec)
+        if not path.exists():
+            msg = (
+                f"No RF prior for {iso3} {census_time_point} at {path}; run the "
+                "census_rake orchestrator (its census_rf pre-stage writes it) "
+                "before running census_rake tasks directly."
+            )
+            raise FileNotFoundError(msg)
+        return pd.read_parquet(path)
+
+    def raked_census_table_path(
+        self,
+        iso3: str,
+        task_parent_id: str,
+        census_time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> Path:
+        root = self.raked_census_root(model_spec.resolution, model_spec.model_version)
+        return root / "tables" / iso3 / census_time_point / f"{task_parent_id}.parquet"
+
+    def save_raked_census_table(
+        self,
+        shape_table: pd.DataFrame,
+        iso3: str,
+        task_parent_id: str,
+        census_time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> None:
+        """Persist a census_rake task's per-shape table (census, base, and
+        rf_parent, plus per written time point: predicted shape_population,
+        built, raked totals, and on-pixel counts) -- the exact unit-level
+        values behind the rasters, for validation and audits."""
+        path = self.raked_census_table_path(
+            iso3, task_parent_id, census_time_point, model_spec
+        )
+        mkdir(path.parent, parents=True, exist_ok=True)
+        shape_table.to_parquet(path)
+
+    def load_raked_census_table(
+        self,
+        iso3: str,
+        task_parent_id: str,
+        census_time_point: str,
+        model_spec: "ModelSpecification",
+    ) -> pd.DataFrame:
+        path = self.raked_census_table_path(
+            iso3, task_parent_id, census_time_point, model_spec
+        )
+        return pd.read_parquet(path)
+
     def raking_factors_root(self, resolution: str, version: str) -> Path:
         return self.model_version_root(resolution, version) / "raking_factors"
 

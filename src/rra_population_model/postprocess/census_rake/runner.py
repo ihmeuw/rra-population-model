@@ -797,8 +797,12 @@ def census_rake(
             task_resources={
                 "queue": queue,
                 "cores": 8,
-                "memory": "16G",
-                "runtime": "60m",
+                # Sized for the per-unit footprint sweep added 2026-09-15:
+                # KOR (108k units) runs in ~1 min locally, USA (8.17M units)
+                # extrapolates to ~1h+; worker peak ~1.2-1.6G x 8 cores plus
+                # the bbox census reads. Pre-footprints this was 16G/60m.
+                "memory": "24G",
+                "runtime": "180m",
                 "project": "proj_rapidresponse",
             },
             flat_node_args=(("iso3", "time-point"), rf_tasks),

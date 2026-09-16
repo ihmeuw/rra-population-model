@@ -232,17 +232,28 @@ class ObmStrategy(ProcessStrategy):
         print("Loading GHSL height")
         height, n_imputed = obm.load_height(bd_data, resolution, block_key, built)
 
+        print("Loading GHSL residential rate for the unknown credit")
+        ghsl_credit, ghsl_seen = obm.load_ghsl_credit(pm_data, resolution, block_key)
+
         print("Deriving OBM measures")
         # `check_features` asserts the six are mutually consistent - notably
         # `volume / density == height` - before any of them is written.
-        features, n_rescaled = obm.derive_features(density, height)
+        features, n_rescaled = obm.derive_features(density, height, ghsl_credit)
         obm.check_features(features, height, land)
 
         n_built = int(built.sum())
         imputed_share = n_imputed / n_built if n_built else 0.0
+        # The share of unknown volume credited at the fallback rather than at
+        # GHSL's own rate is the one number that says how much of the new
+        # residential fraction still rests on an assumption.
+        unknown = density["unknown"]
+        unk_total = float(unknown[built].sum())
+        unk_fallback = float(unknown[built & ~ghsl_seen].sum())
+        fallback_share = unk_fallback / unk_total if unk_total else 0.0
         print(
             f"{block_key}: {n_built} built pixels, {n_rescaled} rescaled, "
-            f"{n_imputed} height-imputed ({imputed_share:.2%})"
+            f"{n_imputed} height-imputed ({imputed_share:.2%}), "
+            f"unknown at fallback credit ({fallback_share:.2%})"
         )
 
         out_paths = {}

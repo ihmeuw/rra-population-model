@@ -11,11 +11,15 @@ shape of `ghsl_r2023a` and `microsoft_v8`:
     {provider}_proportion_residential
     {provider}_p_observed
 
-Nothing here touches disk. `ObmStrategy` in `built.py` calls these functions and
+Nothing here writes. `ObmStrategy` in `built.py` calls these functions and
 handles writing and the symlink fan-out, so OBM goes through the same
 built-version machinery as every other provider - which is also where the
 static-snapshot layout comes from: a single-epoch version fills every other time
 point by symlink automatically.
+
+The `unknown` parent - a footprint OBM measured but could not identify - is
+credited at GHSL's local residential rate rather than assumed to be housing
+outright. See `load_ghsl_credit` and `derive_features` for why.
 """
 
 import numpy as np
@@ -24,6 +28,7 @@ from numpy.typing import NDArray
 
 from rra_population_model import constants as pmc
 from rra_population_model.data import BuildingDensityData, PopulationModelData
+from rra_population_model.model_prep.features.msft_obm import splice_p
 
 
 def load_parent_densities(
@@ -92,6 +97,44 @@ def load_height(
     return height, int(imputed.sum())
 
 
+def load_ghsl_credit(
+    pm_data: PopulationModelData,
+    resolution: str,
+    block_key: str,
+) -> tuple[NDArray[np.float64], NDArray[np.bool_]]:
+    """The residential rate to credit OBM's `unknown` footprints at.
+
+    An unlabelled footprint is not evidence of housing, but it is not evidence
+    against it either, so it is credited at whatever GHSL says about the same
+    ground instead of at 1.0.
+
+    `splice_p` rather than the raster directly, for the reason its own docstring
+    gives: GHSL writes 0.0 where it sees no building, so reading it raw would
+    treat "GHSL is blind here" as "nothing here is residential" and strip the
+    unknown volume out entirely. `splice_p` confines GHSL to the pixels it can
+    actually see and leaves the rest at `MSFT_V8_OBM_P_FALLBACK`, which is the
+    same fallback every other provider in this package gets. Keeping that rule
+    in one place matters more than the alternative of a local mean: it is under
+    1% of v8 volume either way, and a second, differently-behaved fallback would
+    be a worse thing to own.
+
+    Read at `OBM_GHSL_TIME_POINT`, matching `load_height` - OBM is a static
+    snapshot and borrows a single GHSL epoch for everything.
+    """
+
+    def load(measure: str) -> NDArray[np.float64]:
+        raster = pm_data.load_feature(
+            resolution=resolution,
+            block_key=block_key,
+            feature_name=f"ghsl_r2023a_{measure}",
+            time_point=pmc.OBM_GHSL_TIME_POINT,
+        )
+        return np.asarray(raster.to_numpy(), dtype=np.float64)
+
+    credit, owner = splice_p([(load("proportion_residential"), load("density"))])
+    return credit, np.asarray(owner > 0, dtype=np.bool_)
+
+
 def sum_parents(
     density: dict[str, NDArray[np.float64]],
     parents: list[str],
@@ -110,6 +153,7 @@ def sum_parents(
 def derive_features(
     density: dict[str, NDArray[np.float64]],
     height: NDArray[np.float64],
+    ghsl_credit: NDArray[np.float64],
 ) -> tuple[dict[str, NDArray[np.float64]], int]:
     """Rescale the double-counted pixels, then derive the five features.
 
@@ -136,6 +180,20 @@ def derive_features(
 
     total = total_raw * scale
     nonres = sum_parents(density, pmc.OBM_NONRESIDENTIAL_PARENTS) * scale
+
+    # `unknown` stays out of OBM_NONRESIDENTIAL_PARENTS and stays in `total`;
+    # what changes is that it is no longer credited as housing outright. The
+    # complement of GHSL's local rate joins the non-residential sum, leaving the
+    # residential fraction as residential_mu plus a GHSL-credited share of
+    # unknown, over the same total.
+    #
+    # The split has to be fractional, which is why it lives here rather than in
+    # the parent list: naming `unknown` non-residential would assert the
+    # opposite extreme, and `sum_parents` can only take a whole layer.
+    # `* scale` because `nonres` is already rescaled, and dropping it would
+    # break `residential + nonres == total` on the double-counted pixels.
+    unk_nonres = (1.0 - ghsl_credit) * density["unknown"] * scale
+    nonres = nonres + unk_nonres
 
     # GHSL writes 0.0, not NaN, where there is no building; match it exactly.
     proportion_residential = np.where(

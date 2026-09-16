@@ -33,7 +33,7 @@ GBD_LOCATION_SET_ID = 22
 FHS_LOCATION_SET_ID = 39
 LSAE_LOCATION_SET_ID = 125
 LAST_LSAE_LSVID = 1209
-CURRENT_LSAE_LSVID = 1285
+CURRENT_LSAE_LSVID = 1578
 
 
 MODEL_ROOT = Path("/mnt/team/rapidresponse/pub/population-model")
@@ -164,7 +164,7 @@ def cache_raking_data(model_root: str) -> None:
 
     lsae_hierarchy_specs = {
         "lsae_1209": LAST_LSAE_LSVID,
-        "lsae_1285": CURRENT_LSAE_LSVID,
+        "lsae_1578": CURRENT_LSAE_LSVID,
     }
     for name, lsvid in lsae_hierarchy_specs.items():
         print(f"Caching LSAE hierarchy for {name}")
@@ -213,15 +213,15 @@ def cache_raking_data(model_root: str) -> None:
             load_lsae_shapes,
             lsae_shape_root / "2023_10_30" / "lbd_standard_admin_2.shp",
         ),
-        "lsae_1285_a0": (
+        "lsae_1578_a0": (
             load_lsae_shapes,
             lsae_shape_root / "2024_07_29" / "lbd_standard_admin_0.shp",
         ),
-        "lsae_1285_a1": (
+        "lsae_1578_a1": (
             load_lsae_shapes,
             lsae_shape_root / "2024_07_29" / "lbd_standard_admin_1.shp",
         ),
-        "lsae_1285_a2": (
+        "lsae_1578_a2": (
             load_lsae_shapes,
             lsae_shape_root / "2024_07_29" / "lbd_standard_admin_2.shp",
         ),

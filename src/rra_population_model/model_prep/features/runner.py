@@ -197,6 +197,7 @@ def features(
             },
             log_root=pm_data.log_dir("preprocess_features"),
             max_attempts=3,
+            concurrency_limit=2_500,
         )
     time_point_excl = [tp for tp in time_point if tp != "2020q2"]
     if time_point_excl:
@@ -222,6 +223,7 @@ def features(
             },
             log_root=pm_data.log_dir("preprocess_features"),
             max_attempts=3,
+            concurrency_limit=1_000,
         )
 
 
@@ -269,4 +271,5 @@ def geospatial_average_features(
         },
         log_root=pm_data.log_dir("preprocess_geospatial_average_features"),
         max_attempts=2,
+        concurrency_limit=1_000,
     )

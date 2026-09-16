@@ -1,3 +1,4 @@
+import gc
 from pathlib import Path
 from typing import Any
 
@@ -236,7 +237,8 @@ def _census_rf_block_sums(
     }
 
     units = pm_data.load_census_data(
-        iso3, year, bounds=block_box, admin_level=most_detailed_level
+        iso3, year, bounds=block_box, admin_level=most_detailed_level,
+        columns=["shape_id", "geometry"],
     )
     if units.empty:
         return parent_sums, None
@@ -358,17 +360,37 @@ def probe_empirical_lambda(
         f"{'county-like: guarded' if county_like else 'informational only'})"
     )
     ratio = lambda_empirical / utils.RF_LAMBDA_PERSONS
-    if county_like and not (1 / LAMBDA_PROBE_TOLERANCE <= ratio <= LAMBDA_PROBE_TOLERANCE):
+    # ONE-SIDED raise (2026-09-16): only the HIGH side fails. lambda_empirical
+    # >> configured means parents' own rates are noisier than the setting
+    # assumes -- we would be UNDER-pooling, the explosive-rate direction the
+    # mechanism exists to prevent. The LOW side (IRL 2022 read 9 persons: its
+    # 3,420 admin2 parents, median 675 people, are genuinely heterogeneous)
+    # means we over-pool, a direction measured costless in the pooling-scale
+    # sensitivity (held-out accuracy flat from one-level-finer pooling through
+    # a single national pool); it warns and persists instead of failing. The
+    # symmetric band predates semantic pooling, whose finer parents make
+    # legitimately-low readings structurally expected.
+    if county_like and ratio > LAMBDA_PROBE_TOLERANCE:
         msg = (
             f"Empirical pooling mass for {tag} ({lambda_empirical:,.0f} persons) "
-            f"deviates more than {LAMBDA_PROBE_TOLERANCE:g}x from "
-            f"RF_LAMBDA_PERSONS ({utils.RF_LAMBDA_PERSONS:,.0f}) in a "
-            "county-like census where the constant binds: the model's noise/"
-            "heterogeneity regime no longer matches the validated setting -- "
-            "re-measure the pooling constant before trusting construction-"
-            "channel credits."
+            f"exceeds {LAMBDA_PROBE_TOLERANCE:g}x RF_LAMBDA_PERSONS "
+            f"({utils.RF_LAMBDA_PERSONS:,.0f}) in a county-like census where "
+            "the constant binds: parent rates are noisier than the validated "
+            "setting assumes, so the configured constant UNDER-pools -- the "
+            "explosive-rate direction. Re-measure the pooling constant before "
+            "trusting construction-channel credits."
         )
         raise ValueError(msg)
+    if county_like and ratio < 1 / LAMBDA_PROBE_TOLERANCE:
+        print(
+            f"WARNING lambda probe {tag}: empirical mass {lambda_empirical:,.0f} "
+            f"is more than {LAMBDA_PROBE_TOLERANCE:g}x BELOW the configured "
+            f"{utils.RF_LAMBDA_PERSONS:,.0f} -- parents are more heterogeneous "
+            "than the setting assumes, so we over-pool (measured-safe "
+            "direction; accuracy flat through fully-national pooling). "
+            "Persisted for review, not fatal."
+        )
+        return {"lambda_empirical": lambda_empirical, "probe_status": "low_side_warning"}
     return {
         "lambda_empirical": lambda_empirical,
         "probe_status": "guarded" if county_like else "informational",
@@ -395,19 +417,21 @@ def census_rf_main(
     # most-detailed units (the units actually raked, matching the in-task sums
     # the mechanism uses) rather than the parent rows' own population_total,
     # which can be NaN or disagree with the children in some hierarchies.
+    # MEMORY DISCIPLINE: run_parallel forks (pathos); every byte of parent-
+    # process heap live at fork time is effectively multiplied by the worker
+    # count once children touch inherited pages (refcounts/gc defeat COW).
+    # The USA/CAN/MEX pre-stage tasks hung for their full runtime inside a
+    # 24G cgroup for exactly this reason (2026-09-16, run 2026_09_06.007:
+    # log silence after "Summing predictions...", dev node fine). So: read
+    # only what block selection needs before the fork, free it, and load the
+    # heavy most-detailed hierarchy AFTER the workers return.
     year = census_time_point.split("q")[0]
-    hierarchy = pd.read_parquet(
-        pm_data.census_path(iso3, year),
-        columns=["shape_id", "admin_level", "path_to_top_parent", "population_total"],
-    )
-    most_detailed_level = int(hierarchy["admin_level"].max())
+    census_levels = pd.read_parquet(
+        pm_data.census_path(iso3, year), columns=["admin_level"]
+    )["admin_level"]
+    most_detailed_level = int(census_levels.max())
+    del census_levels
     pooling_level = max(0, min(2, most_detailed_level - 1))
-    children = hierarchy.loc[
-        hierarchy["admin_level"] == most_detailed_level,
-        ["shape_id", "path_to_top_parent", "population_total"],
-    ].set_index("shape_id")
-    children["parent"] = children["path_to_top_parent"].str.split(",").str[pooling_level]
-    census_by_parent = children.groupby("parent")["population_total"].sum()
     parents = pm_data.load_census_data(iso3, year, admin_level=pooling_level).loc[
         :, ["shape_id", "geometry"]
     ].rename(columns={"shape_id": "pooling_parent_id"})
@@ -465,12 +489,33 @@ def census_rf_main(
             )
         )
 
+    parent_id_list = parents["pooling_parent_id"].tolist()
+    del parents, sindex, block_bounds, modeling_frame
+    gc.collect()
+
     print(f"Summing predictions over {len(block_args)} blocks at {census_time_point}")
     block_sums = parallel.run_parallel(
         _census_rf_block_sums,
         block_args,
         num_cores=num_cores,
+        progress_bar=True,
     )
+    del block_args
+    gc.collect()
+
+    # Now the heavy read: most-detailed units' census masses and parents.
+    hierarchy = pd.read_parquet(
+        pm_data.census_path(iso3, year),
+        columns=["shape_id", "admin_level", "path_to_top_parent", "population_total"],
+        filters=[("admin_level", "==", most_detailed_level)],
+    )
+    children = hierarchy.loc[
+        :, ["shape_id", "path_to_top_parent", "population_total"]
+    ].set_index("shape_id")
+    del hierarchy
+    children["parent"] = children["path_to_top_parent"].str.split(",").str[pooling_level]
+    children = children.drop(columns=["path_to_top_parent"])
+    census_by_parent = children.groupby("parent")["population_total"].sum()
     predicted: dict[str, float] = {}
     unit_frames = []
     for parent_sums, units_df in block_sums:
@@ -516,7 +561,7 @@ def census_rf_main(
         f"({int(well_measured.sum()):,} well-measured units)"
     )
 
-    rf_prior = parents.loc[:, ["pooling_parent_id"]].copy()
+    rf_prior = pd.DataFrame({"pooling_parent_id": parent_id_list})
     rf_prior["census_population"] = (
         rf_prior["pooling_parent_id"].map(census_by_parent).fillna(0.0)
     )
@@ -815,6 +860,27 @@ def census_rake(
             max_attempts=2,
             log_root=pm_data.log_dir("postprocess_census_rf"),
         )
+
+    # HARD GATE: census_rake tasks consume the priors, so a pre-stage failure
+    # must stop the orchestrator here -- jobmon.run_parallel returns even when
+    # some tasks failed, and on 2026_09_06.007 that launched thousands of
+    # doomed rake tasks against four missing priors. The prior parquet is
+    # written atomically (tmp + rename), so existence == complete.
+    missing_priors = sorted(
+        (task_iso3, task_ctp)
+        for task_iso3, task_ctp in census_tasks.loc[:, ["iso3", "census_time_point"]]
+        .drop_duplicates()
+        .itertuples(index=False, name=None)
+        if not pm_data.census_rf_prior_path(task_iso3, task_ctp, model_spec).exists()
+    )
+    if missing_priors:
+        msg = (
+            f"{len(missing_priors)} census_rf pre-stage task(s) did not produce "
+            f"a prior: {missing_priors[:10]}"
+            f"{' ...' if len(missing_priors) > 10 else ''}. "
+            "Fix and rerun the orchestrator before any census_rake task runs."
+        )
+        raise RuntimeError(msg)
 
     _check_complete = functools.partial(
         check_complete,

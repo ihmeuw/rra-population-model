@@ -329,12 +329,17 @@ class PopulationModelData:
         year: str,
         bounds: Bounds | None = None,
         admin_level: int | None = None,
+        columns: list[str] | None = None,
     ) -> gpd.GeoDataFrame:
         bbox = bounds_to_bbox(bounds)
         path = self.census_path(iso3, year)
         kwargs = {"bbox": bbox}
         if admin_level is not None:
             kwargs["filters"] = [("admin_level", "==", admin_level)]  # type: ignore[assignment]
+        if columns is not None:
+            # Must include "geometry"; large censuses carry heavy per-row
+            # string columns that bbox readers shouldn't pay for.
+            kwargs["columns"] = columns  # type: ignore[assignment]
 
         return gpd.read_parquet(path, **kwargs)
 

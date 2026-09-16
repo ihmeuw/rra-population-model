@@ -985,7 +985,13 @@ class PopulationModelData:
         country aggregates and RF_country the census_rake tasks pool toward."""
         path = self.census_rf_prior_path(iso3, census_time_point, model_spec)
         mkdir(path.parent, parents=True, exist_ok=True)
-        rf_prior.to_parquet(path)
+        # Write-then-rename: the orchestrator skips this pre-stage when the
+        # file exists, so a task killed mid-write must not leave a partial
+        # parquet behind (it would be skipped over forever and fail every
+        # census_rake task for this census).
+        tmp_path = path.with_suffix(".parquet.tmp")
+        rf_prior.to_parquet(tmp_path)
+        tmp_path.replace(path)
 
     def load_census_rf_prior(
         self,

@@ -411,6 +411,13 @@ def census_rf_main(
     parents = pm_data.load_census_data(iso3, year, admin_level=pooling_level).loc[
         :, ["shape_id", "geometry"]
     ].rename(columns={"shape_id": "pooling_parent_id"})
+    if parents["pooling_parent_id"].duplicated().any():
+        # A duplicate would silently merge-and-drop predicted mass in the
+        # per-block dict accumulation, then crash the tasks' Series.map far
+        # from the cause.
+        dupes = parents.loc[parents["pooling_parent_id"].duplicated(), "pooling_parent_id"]
+        msg = f"duplicate pooling parent ids in census file: {sorted(set(dupes))[:5]}"
+        raise ValueError(msg)
     print(
         f"{iso3} {census_time_point}: most detailed level {most_detailed_level} "
         f"-> pooling level {pooling_level}, {len(parents):,} parents"
@@ -479,6 +486,12 @@ def census_rf_main(
     # bound = q99 for families of >= DENSITY_CAP_MIN_UNITS, else k x family max
     # (constants + provenance in utils). Parents with no well-measured units
     # stay NaN = uncapped.
+    if not unit_frames:
+        msg = (
+            f"{iso3} {census_time_point}: no most-detailed census units "
+            "intersect any prediction block; cannot compute density bounds."
+        )
+        raise ValueError(msg)
     per_tp = pd.concat(unit_frames, ignore_index=True).groupby("shape_id").sum()
     footprint = per_tp.max(axis=1).reindex(children.index).fillna(0.0)
     well_measured = (
@@ -521,6 +534,32 @@ def census_rf_main(
         f"{iso3} {census_time_point}: census {census_total:,.0f} / predicted "
         f"{predicted_total:,.1f} -> rf_country {rf_prior['rf_country'].iloc[0]:.4f}"
     )
+    # Shared-trigger surface (print-only; the diagnostics stage carries the
+    # FLAG): a parent whose predicted mass is prior-dominated (M_p < L/rf_c,
+    # i.e. the pooled rate leans more on the prior than on data -- a derived
+    # threshold, not a tuned one) AND whose density bound is NaN has BOTH
+    # backstops off at once: RF_p ~ rf_c*(C_p+L)/L is unbounded in C_p and no
+    # cap constrains later credit. The incumbent's near-zero-denominator
+    # pathology can reappear at parent scale exactly here.
+    rf_c = float(rf_prior["rf_country"].iloc[0])
+    if rf_c > 0:
+        prior_dominated = (
+            rf_prior["predicted_population"] < utils.RF_LAMBDA_PERSONS / rf_c
+        )
+        shared_trigger = (
+            prior_dominated
+            & rf_prior["density_bound"].isna()
+            & (rf_prior["census_population"] > 0)
+        )
+        if shared_trigger.any():
+            print(
+                f"WARNING {iso3} {census_time_point}: "
+                f"{int(shared_trigger.sum()):,} parents are prior-dominated AND "
+                f"uncapped ({rf_prior.loc[shared_trigger, 'census_population'].sum():,.0f} "
+                "census people) -- construction credit there is bounded by "
+                "neither pooling evidence nor a density cap."
+            )
+
     # Probe BEFORE saving: a failed probe must not leave a prior on disk, or
     # the orchestrator's skip-if-exists would mask the failure on relaunch.
     probe = probe_empirical_lambda(rf_prior, iso3, census_time_point)

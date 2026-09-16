@@ -601,6 +601,13 @@ def compute_shape_values(
             n_on[tp] = by_shape(on_t.astype(np.float64))
 
     census = shapes["population_total"].to_numpy(dtype=np.float64)
+    if not np.isfinite(census).all():
+        msg = (
+            f"{int((~np.isfinite(census)).sum())} census units have non-finite "
+            "population_total; y would be NaN and the anchor-exactness guard "
+            "would pass vacuously (NaN compares False), so fail here instead."
+        )
+        raise ValueError(msg)
     base = shapes[f"shape_population_{census_time_point}"].to_numpy(dtype=np.float64)
 
     # Growth-density cap bound: precomputed per pooling parent by the census_rf
@@ -676,7 +683,8 @@ def compute_shape_values(
         shape_table[f"raked_{census_time_point}"].to_numpy()[gated].sum()
         - census[gated].sum()
     )
-    if anchor_error > max(1e-6 * census[gated].sum(), 1e-6):
+    # not-<= rather than > so a NaN error fails loudly instead of passing.
+    if not (anchor_error <= max(1e-6 * census[gated].sum(), 1e-6)):
         msg = (
             f"v3 raked population is not exact at the census anchor "
             f"{census_time_point}: |error| = {anchor_error:.6g} people"

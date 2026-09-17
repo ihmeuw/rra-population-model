@@ -8,6 +8,7 @@ import pandas as pd
 import rasterra as rt
 from affine import Affine
 from rasterio import features
+from scipy import ndimage
 from shapely import area, box, intersection, set_precision
 
 from rra_population_model import constants as pmc
@@ -63,6 +64,16 @@ DENSITY_CAP_QUANTILE = 0.99
 DENSITY_CAP_MIN_UNITS = 100
 DENSITY_CAP_SMALL_FAMILY_MULT = 3.0
 DENSITY_CAP_MIN_CENSUS = 5.0
+# Border-mask dilation window for the overlay skeleton (adopted 2026-09-16;
+# mechanism, validation and cost in .claude/cansus-rake-dilation/RESULTS.md):
+# a dilated ring pixel is admitted to the exact path only if a window this
+# size around it sees two distinct assigned shape ids -- the only geometry in
+# which the all_touched graze miss can misattribute area between shapes. At 3
+# one real beneficiary (owned pixel centre at Chebyshev distance 2) was
+# missed; at 5, zero graze-class misses remain against an exhaustive float64
+# overlay across all validated tasks, while single-unit/coastline borders
+# still pay nothing.
+BORDER_DILATION_WINDOW = 5
 
 ADMIN_EXCLUSIONS = {
     "ARG": [
@@ -708,7 +719,9 @@ def build_overlay_skeleton(
     a single shape, so a rasterized center hit gives exact full coverage with no
     geometry work. Only border pixels (cost ~ perimeter, not area) are
     polygonized and exactly intersected, and a border pixel may split across
-    several shapes.
+    several shapes. The border mask is widened by one ring where two shapes are
+    locally present, because ``all_touched`` can miss a pixel a boundary only
+    grazes (see the inline comment and BORDER_DILATION_WINDOW).
 
     Nodata (e.g. water) pixels are dropped: they carry no prediction and would
     only contribute zero. This makes multi-admin tasks match the behavior the
@@ -749,6 +762,29 @@ def build_overlay_skeleton(
         all_touched=True,
         dtype="uint8",
     ).astype(bool)
+    # ``all_touched`` walks each boundary segment Bresenham-style, which can skip
+    # a pixel the segment only grazes (a shallow slope running nearly along a
+    # pixel edge). Such a pixel lands on the fast path: its centre owner is
+    # awarded the full pixel and the shape holding the sliver loses that row --
+    # equal-and-opposite errors on *different* shapes, invisible to totals.
+    # Recover them by widening the mask one ring, but only where a second shape
+    # is locally present (a BORDER_DILATION_WINDOW box around the pixel sees two
+    # distinct assigned ids): with one shape in reach there is nothing to
+    # misattribute, so single-unit and coastline-facing borders -- the expensive
+    # ones -- pay nothing. Widening is safe by construction (it only moves
+    # pixels from the fast path to the exact path); the outcome is validated
+    # against an exhaustive float64 overlay in
+    # .claude/cansus-rake-dilation/RESULTS.md.
+    dilated = ndimage.binary_dilation(
+        border_mask, structure=np.ones((3, 3), dtype=bool)
+    )
+    sentinel = np.iinfo(assigned.dtype).max
+    id_max = ndimage.maximum_filter(assigned, size=BORDER_DILATION_WINDOW)
+    id_min = ndimage.minimum_filter(
+        np.where(assigned > 0, assigned, sentinel), size=BORDER_DILATION_WINDOW
+    )
+    multi_shape = (id_max > 0) & (id_min < sentinel) & (id_max != id_min)
+    border_mask |= dilated & multi_shape
     border_mask &= valid
 
     # Interior pixels: full coverage, exactly one shape each, no geometry needed.

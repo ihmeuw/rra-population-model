@@ -30,7 +30,7 @@ class RESOLUTIONS(StrEnum):
 
 class BuiltVersion(BaseModel):
     provider: Literal["ghsl", "microsoft"]
-    version: Literal["v6", "v7", "v7_1", "r2023a"]
+    version: Literal["v7_1", "v8", "r2023a"]
     time_points: list[str]
     measures: list[str]
 
@@ -57,43 +57,51 @@ BUILT_VERSIONS = {
             "height",
             "proportion_residential",
             "density",
-            "residential_density",
-            "nonresidential_density",
+            # "residential_density",
+            # "nonresidential_density",
             "volume",
             "residential_volume",
-            "nonresidential_volume",
+            # "nonresidential_volume",
         ],
     ),
-    "microsoft_v6": BuiltVersion(
+    # "microsoft_v7_1": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7_1",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2026), range(1, 5))
+    #     ][1:-2],
+    #     measures=[
+    #         "density",
+    #         "height",
+    #     ],
+    # ),
+    "microsoft_v8": BuiltVersion(
         provider="microsoft",
-        version="v6",
+        version="v8",
         time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
-        ][1:],
-        measures=["density"],
-    ),
-    "microsoft_v7": BuiltVersion(
-        provider="microsoft",
-        version="v7",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2024), range(1, 5))
-        ][1:],
+            f"{y}q{q}" for y, q in itertools.product(range(2020, 2027), range(1, 5))
+        ][1:-3],
         measures=[
             "density",
             "height",
         ],
     ),
-    "microsoft_v7_1": BuiltVersion(
-        provider="microsoft",
-        version="v7_1",
-        time_points=[
-            f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
-        ][1:-2],
-        measures=[
-            "density",
-            "height",
-        ],
-    ),
+    # "microsoft_v7_1_d": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7_1_d",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+    #     ][1:-2],
+    #     measures=["density"],
+    # ),
+    # "microsoft_v7_1_h": BuiltVersion(
+    #     provider="microsoft",
+    #     version="v7_1_h",
+    #     time_points=[
+    #         f"{y}q{q}" for y, q in itertools.product(range(2020, 2025), range(1, 5))
+    #     ][1:-2],
+    #     measures=["height"],
+    # ),
 }
 
 DENOMINATORS = []
@@ -101,11 +109,10 @@ for built_version in BUILT_VERSIONS.values():
     for denominator in [
         "density",
         "volume",
-        "residential_density",
+        # "residential_density",
         "residential_volume",
     ]:
         DENOMINATORS.append(f"{built_version.name}_{denominator}")  # noqa: PERF401
-
 
 FEATURE_AVERAGE_RADII = [
     100,
@@ -116,10 +123,19 @@ FEATURE_AVERAGE_RADII = [
     10000,
 ]
 
+BUILT_VERSION_TIME_POINTS = sorted(
+    set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
+)
+
 ALL_TIME_POINTS = sorted(
     set.union(*[set(v.time_points) for v in BUILT_VERSIONS.values()])
-    | {f"{y}q1" for y in range(1975, 2026)}
+    | {f"{y}q1" for y in range(1975, 2027)}
 )
+
+MODELING_TIME_POINTS = [
+    tp for tp in BUILT_VERSION_TIME_POINTS
+    if int(tp.split("q")[0]) >= 2020
+]
 
 
 class CRS(BaseModel):

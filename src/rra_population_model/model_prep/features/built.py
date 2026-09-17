@@ -148,14 +148,14 @@ class ProcessStrategy(ProcessingStrategy):
     ) -> dict[str, Path]:
         out_paths = {}
         for feature in features:
+            print(f"Processing {feature}...")
+            buffered_measure = mosaic_tile(
+                measure=feature,
+                feature_metadata=self.feature_metadata,
+                pm_data=pm_data,
+            )
             for radius in feature_average_radii:
-                print(f"Processing {feature} with radius {radius}m.")
-                buffered_measure = mosaic_tile(
-                    measure=feature,
-                    feature_metadata=self.feature_metadata,
-                    pm_data=pm_data,
-                )
-                print(f"Processing {feature} with radius {radius}m.")
+                print(f"    ... with radius {radius}m.")
                 average_measure = (
                     utils.make_spatial_average(
                         tile=buffered_measure,
@@ -170,7 +170,6 @@ class ProcessStrategy(ProcessingStrategy):
                     feature_name=f"{feature}_{radius}m",
                     **self.feature_metadata.shared_kwargs,
                 )
-
                 out_paths[f"{feature}_{radius}m"] = pm_data.feature_path(
                     feature_name=f"{feature}_{radius}m",
                     **self.feature_metadata.shared_kwargs,
@@ -265,21 +264,37 @@ def _generate_microsoft_derived_measures(
             "density": "microsoft_v6_density",
             "height": "ghsl_r2023a_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
         "microsoft_v7": {
             "density": "microsoft_v7_density",
             "height": "microsoft_v7_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
         "microsoft_v7_1": {
             "density": "microsoft_v7_1_density",
             "height": "microsoft_v7_1_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
-        "microsoft_v7_e101": {
-            "density": "microsoft_v7_e101_density",
-            "height": "microsoft_v7_e101_height",
+        "microsoft_v7_1_d": {
+            "density": "microsoft_v7_1_d_density",
+            "height": "ghsl_r2023a_height",
             "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
+        },
+        "microsoft_v7_1_h": {
+            "density": "ghsl_r2023a_density",
+            "height": "microsoft_v7_1_h_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
+        },
+        "microsoft_v8": {
+            "density": "microsoft_v8_density",
+            "height": "microsoft_v8_height",
+            "p_residential": "ghsl_r2023a_proportion_residential",
+            "reference_density": "ghsl_r2023a_density",
         },
     }[built_version_name]
     density = pm_data.load_feature(
@@ -296,23 +311,36 @@ def _generate_microsoft_derived_measures(
         **feature_metadata.shared_kwargs,
     )._ndarray
 
-    # Since we're crosswalking, ensure we have height wherever
-    # there is density, even if GHSL doesn't think there is density.
-    height_min = HEIGHT_MIN
-    if (height_arr > 0).any():
-        height_min = float(np.nanmin(height_arr[height_arr > 0]))
-    density_threshold = 0.01
-    density_is_positive = density_arr >= density_threshold
-    height_is_zero = height_arr == 0
-    height_arr[density_is_positive & height_is_zero] = height_min
+    # CROSSWALKING PROCEDURES
+    # 1) ensure we have height wherever there is density, even if GHSL doesn't think there is density
+    if feature_dict["density"].replace("_density", "") != feature_dict["height"].replace("_height", ""):
+        height_min = HEIGHT_MIN
+        if (height_arr > 0).any():
+            height_min = float(np.nanmin(height_arr[height_arr > 0]))
+        density_threshold = 0.01
+        density_is_positive = density_arr >= density_threshold
+        height_is_zero = height_arr == 0
+        height_arr[density_is_positive & height_is_zero] = height_min
+
+    # 2) if Microsoft places buildings somewhere GHSL does not, call them residential
+    if "reference_density" in feature_dict.keys():
+        reference_density_arr = pm_data.load_feature(
+            feature_name=feature_dict["reference_density"],
+            **feature_metadata.shared_kwargs,
+        )._ndarray
+        density_threshold = 0.01
+        density_is_positive = density_arr >= density_threshold
+        reference_density_is_zero = reference_density_arr < density_threshold
+        residential_is_zero = p_residential_arr == 0
+        p_residential_arr[density_is_positive & reference_density_is_zero & residential_is_zero] = 1
 
     out_ops = {
         "density": lambda d, _, __: d,
-        "residential_density": lambda d, _, p: d * p,
-        "nonresidential_density": lambda d, _, p: d * (1 - p),
+        # "residential_density": lambda d, _, p: d * p,
+        # "nonresidential_density": lambda d, _, p: d * (1 - p),
         "volume": lambda d, h, _: h * d,
         "residential_volume": lambda d, h, p: h * d * p,
-        "nonresidential_volume": lambda d, h, p: h * d * (1 - p),
+        # "nonresidential_volume": lambda d, h, p: h * d * (1 - p),
     }
     for measure, op in out_ops.items():
         out = rt.RasterArray(
@@ -422,11 +450,13 @@ def mosaic_tile(
     pm_data: PopulationModelData,
 ) -> rt.RasterArray:
     tiles = []
-    for bounds in feature_metadata.block_bounds.values():
+    for buffer_block_key, bounds in feature_metadata.block_bounds.items():
         try:
             tile = pm_data.load_feature(
+                block_key=buffer_block_key,
                 feature_name=measure,
-                **feature_metadata.shared_kwargs,
+                resolution=feature_metadata.resolution,
+                time_point=feature_metadata.time_point,
                 subset_bounds=bounds,
             )
             tile = tile.reproject(

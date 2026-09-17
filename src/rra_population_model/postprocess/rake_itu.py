@@ -15,12 +15,20 @@ from rra_population_model.data import PopulationModelData
 RAKING_VERSION = "gbd_2023"
 
 
+def disputed_admins(raking_pop: pd.DataFrame) -> pd.DataFrame:
+    # exclude Azad Jammu & Kashmir (53615) and Gilgit-Baltistan (53617) from Pakistan (not in WPP Pakistan)
+    raking_pop.loc[raking_pop["location_id"].isin([53615, 53617]), "ihme_loc_id"] = raking_pop["ihme_loc_id"].str.replace("PAK", "XJK")
+
+    return raking_pop
+
+
 def load_admin_populations(
     pm_data: PopulationModelData,
     iso3: str,
     time_point: str,
 ) -> gpd.GeoDataFrame:
     raking_pop = pm_data.load_raking_population(version=RAKING_VERSION)
+    raking_pop = disputed_admins(raking_pop)
     all_pop = raking_pop.loc[raking_pop.most_detailed == 1].set_index(
         ["year_id", "location_id"]
     )["wpp_population"]
@@ -92,7 +100,7 @@ def rake_itu_main(
     # ITU has finer scale boundaries so we need to fill in the gaps
     # using the nearest location id
     to_fill_mask = (itu_mask.to_numpy() == 1) & (location_mask == 0)
-    location_mask = fillnodata(location_mask, ~to_fill_mask, max_search_distance=100)
+    location_mask = fillnodata(location_mask, ~to_fill_mask, max_search_distance=int(itu_mask.resolution[0]))
 
     print("Building modeling frame filters")
     block_key_x = modeling_frame["block_key"].apply(lambda x: int(x.split("X")[0][-4:]))
@@ -206,6 +214,12 @@ def rake_itu(
     available_iso3s = pm_data.list_itu_iso3s()
     iso3s = clio.convert_choice(iso3, available_iso3s)
 
+    model_spec = pm_data.load_model_specification(resolution, version)
+    iso3s = [
+        iso3 for iso3 in iso3s
+        if not pm_data.raked_prediction_path(iso3, time_point, model_spec).exists()
+    ]
+
     prediction_time_points = pm_data.list_raw_prediction_time_points(
         resolution, version
     )
@@ -219,7 +233,7 @@ def rake_itu(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": "75G",
+            "memory": "80G",
             "runtime": "60m",
             "project": "proj_rapidresponse",
         },
@@ -232,6 +246,10 @@ def rake_itu(
             "version": version,
             "output-dir": output_dir,
         },
-        max_attempts=3,
+        max_attempts=2,
+        resource_scales={
+            "memory":  iter([300     ]),  # G
+            "runtime": iter([180 * 60]),  # seconds
+        },
         log_root=pm_data.log_dir("postprocess_rake_itu"),
     )

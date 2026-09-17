@@ -130,15 +130,27 @@ def inference(
     pm_data = PopulationModelData(output_dir)
     feature_time_points = pm_data.list_feature_time_points(resolution)
     time_points = clio.convert_choice(time_point, feature_time_points)
-    time_points = sorted(
-        [time_point for time_point in time_points if time_point.startswith("202")]
-    )
+    model_spec = pm_data.load_model_specification(resolution, version)
+    if model_spec.denominator.startswith("microsoft"):
+        time_points = sorted(
+            [time_point for time_point in time_points if time_point.startswith("202")]
+        )
+    elif model_spec.denominator.startswith("ghsl"):
+        time_points = sorted(
+            [time_point for time_point in time_points if time_point.endswith("q1")]
+        )
+    else:
+        msg = f"Unexpected denominator: {model_spec.denominator}"
+        raise ValueError(msg)
+    # time_points = ["2020q1", "2020q2"]
+    # versions = [f"2025_11_08.0{(i + 1):02d}" for i in range(60)]
     print(f"Running inference for {len(time_points)} time points.")
 
     jobmon.run_parallel(
         runner="pmtask model",
         task_name="inference",
         node_args={
+            # "version": versions,
             "time-point": time_points,
         },
         task_args={
@@ -148,9 +160,10 @@ def inference(
         },
         task_resources={
             "queue": queue,
-            "memory": "20G",
-            "runtime": "480m",
+            "memory": "24G",
+            "runtime": "360m",
             "project": "proj_rapidresponse",
         },
         log_root=pm_data.log_dir("model_inference"),
+        max_attempts=2,
     )

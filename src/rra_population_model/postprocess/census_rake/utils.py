@@ -14,8 +14,7 @@ from shapely import area, box, intersection, set_precision
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
 
-# v3-graded temporal mechanism constants. All three are measured, not chosen --
-# derivations and evidence in .claude/census_rake_temporal/DESIGN.md:
+# v3-graded temporal mechanism constants. All three are measured, not chosen:
 #   K_PERSIST -- quarters a newly-appearing pixel must stay ON before its
 #     population is creditable. Genuine construction accumulates and never
 #     reverts; detector flicker reverts. Two independent measurements agree on
@@ -64,8 +63,7 @@ DENSITY_CAP_QUANTILE = 0.99
 DENSITY_CAP_MIN_UNITS = 100
 DENSITY_CAP_SMALL_FAMILY_MULT = 3.0
 DENSITY_CAP_MIN_CENSUS = 5.0
-# Border-mask dilation window for the overlay skeleton (adopted 2026-09-16;
-# mechanism, validation and cost in .claude/cansus-rake-dilation/RESULTS.md):
+# Border-mask dilation window for the overlay skeleton (adopted 2026-09-16):
 # a dilated ring pixel is admitted to the exact path only if a window this
 # size around it sees two distinct assigned shape ids -- the only geometry in
 # which the all_touched graze miss can misattribute area between shapes. At 3
@@ -524,9 +522,8 @@ def compute_shape_values(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Per-shape v3-graded populations and effective raking factors.
 
-    The v3 mechanism ("flat + persistent-pixel construction channel", see
-    .claude/census_rake_temporal/DESIGN.md), per census unit i with census C_i
-    anchored at the census time point t_c:
+    The v3 mechanism ("flat + persistent-pixel construction channel"), per
+    census unit i with census C_i anchored at the census time point t_c:
 
         y_i(t)     = gate_i(t) * [ C_i + RF_p * built_i(t) * w_i(t) ]
         built_i(t) = population in pixels OFF throughout the anchor window
@@ -773,8 +770,7 @@ def build_overlay_skeleton(
     # misattribute, so single-unit and coastline-facing borders -- the expensive
     # ones -- pay nothing. Widening is safe by construction (it only moves
     # pixels from the fast path to the exact path); the outcome is validated
-    # against an exhaustive float64 overlay in
-    # .claude/cansus-rake-dilation/RESULTS.md.
+    # against an exhaustive float64 overlay.
     dilated = ndimage.binary_dilation(
         border_mask, structure=np.ones((3, 3), dtype=bool)
     )

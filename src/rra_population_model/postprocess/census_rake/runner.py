@@ -31,9 +31,8 @@ DOWNSAMPLE_ADMINS = 0
 # (one admin level above the census's most detailed, capped at admin2;
 # national when admin1 is most detailed), computed by the census_rf pre-stage
 # and looked up per unit -- so these thresholds can be retuned for compute
-# freely. Pooling-scale sensitivity itself is measured flat
-# (.claude/census_rake_temporal/pooling_sensitivity.py: one level finer
-# through fully national, wMAPE spread <=0.01 KOR / <=0.03 ESP).
+# freely. Pooling-scale sensitivity itself is measured flat (one level finer
+# through fully national: wMAPE spread <=0.01 KOR / <=0.03 ESP).
 TASK_SPLIT_START_LEVEL = 1
 TASK_SPLIT_BOUNDS_AREA = 2e11
 TASK_SPLIT_AREA_NO_POP = 1e12
@@ -668,8 +667,7 @@ def check_complete(
 
 # Per-task resources are predicted from each task's admin features, replacing the
 # old xxl/xl/big/standard tiers (one workflow, individually sized tasks). Model
-# calibrated on the 2026-07-06 full-run jobmon metadata (17,073 done tasks; see
-# .claude/validate_census_rake/calibrate_per_task_resources.py):
+# calibrated on the 2026-07-06 full-run jobmon metadata (17,073 done tasks):
 #   MEMORY = margin * (floor
 #            + census-cache term: the country census parquet is scanned through
 #              the page cache each task (USA 11.7 GB -> ~26 GB floor)

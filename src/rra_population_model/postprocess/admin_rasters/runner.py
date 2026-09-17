@@ -33,8 +33,7 @@ GDAL_CACHEMAX_MB = 512
 # the antimeridian-recentered bbox where that is narrower. Observed jobmon max
 # RSS tracks the canvas tightly for both worker branches (peak <= ~3.5G +
 # ~3.0x canvas; runtime <= ~40s + ~23s per canvas GB; calibrated on five
-# single-time-point test runs -- see
-# .claude/early_access/calibrate_canvas_bins.py). Requests carry a 1.1x memory
+# single-time-point test runs). Requests carry a 1.1x memory
 # and 1.5x runtime margin; jobmon's default +50% retry bump is the backstop.
 MEMORY_FLOOR_GB = 3.5
 MEMORY_PER_CANVAS_GB = 3.0

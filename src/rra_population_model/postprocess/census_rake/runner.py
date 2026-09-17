@@ -694,7 +694,11 @@ MEMORY_MARGIN = 1.15
 MEMORY_BOUNDS_GB = (8, 240)
 RUNTIME_FLOOR_MIN = 6.0
 RUNTIME_PER_KKM2 = 0.09
-RUNTIME_PER_KKM_PERIM = 2.5
+# Perimeter term raised 2.5 -> 6 with the border-mask dilation (2026-09-16):
+# exact-path border pixels are what this term prices, and targeted dilation
+# multiplies them 2.0-2.75x where units are dense. Recalibrate from the first
+# full run's measured runtimes.
+RUNTIME_PER_KKM_PERIM = 6.0
 RUNTIME_MARGIN = 1.7
 RUNTIME_BOUNDS_MIN = (10, 240)
 

@@ -1,4 +1,7 @@
+import concurrent.futures
 import gc
+import multiprocessing
+import time
 from pathlib import Path
 from typing import Any
 
@@ -416,14 +419,14 @@ def census_rf_main(
     # most-detailed units (the units actually raked, matching the in-task sums
     # the mechanism uses) rather than the parent rows' own population_total,
     # which can be NaN or disagree with the children in some hierarchies.
-    # MEMORY DISCIPLINE: run_parallel forks (pathos); every byte of parent-
-    # process heap live at fork time is effectively multiplied by the worker
-    # count once children touch inherited pages (refcounts/gc defeat COW).
-    # The USA/CAN/MEX pre-stage tasks hung for their full runtime inside a
-    # 24G cgroup for exactly this reason (2026-09-16, run 2026_09_06.007:
-    # log silence after "Summing predictions...", dev node fine). So: read
-    # only what block selection needs before the fork, free it, and load the
-    # heavy most-detailed hierarchy AFTER the workers return.
+    # MEMORY DISCIPLINE: keep the parent process small while the worker pool
+    # runs -- parent + num_cores workers share one cgroup budget. Read only
+    # what block selection needs up front, free it, and load the heavy
+    # most-detailed hierarchy AFTER the workers return. (Historical note:
+    # this reorder was first made chasing the 2026-09-16 USA/CAN/MEX hang as
+    # a fork/COW blowup; the hang was actually the fork/pyarrow deadlock
+    # fixed by the spawn pool below. The small-parent discipline stays on its
+    # own merits.)
     year = census_time_point.split("q")[0]
     census_levels = pd.read_parquet(
         pm_data.census_path(iso3, year), columns=["admin_level"]
@@ -493,12 +496,28 @@ def census_rf_main(
     gc.collect()
 
     print(f"Summing predictions over {len(block_args)} blocks at {census_time_point}")
-    block_sums = parallel.run_parallel(
-        _census_rf_block_sums,
-        block_args,
-        num_cores=num_cores,
-        progress_bar=True,
-    )
+    # SPAWNED workers, not forked: these workers read the census parquet via
+    # pyarrow, whose internal thread pool does not survive a fork. Forked
+    # children (rra_tools.parallel -> pathos) deadlocked on the threaded
+    # multi-row-group reads of large censuses -- USA/CAN froze at 0 completed
+    # blocks for their entire runtime on 2026-09-16 while every small census
+    # (single-row-group, serial read path) sailed through. A spawned child is
+    # a fresh interpreter with its own pool. Plain progress prints (not a
+    # carriage-return bar) so the task log shows exactly where a stall sits.
+    ctx = multiprocessing.get_context("spawn")
+    block_sums = []
+    t_start = time.time()
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=num_cores, mp_context=ctx
+    ) as pool:
+        for i, result in enumerate(pool.map(_census_rf_block_sums, block_args), 1):
+            block_sums.append(result)
+            if i % 10 == 0 or i == len(block_args):
+                print(
+                    f"  {i}/{len(block_args)} blocks done "
+                    f"({time.time() - t_start:,.0f}s)",
+                    flush=True,
+                )
     del block_args
     gc.collect()
 

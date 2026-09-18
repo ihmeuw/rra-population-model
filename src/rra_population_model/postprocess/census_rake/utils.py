@@ -9,7 +9,7 @@ import rasterra as rt
 from affine import Affine
 from rasterio import features
 from scipy import ndimage
-from shapely import area, box, intersection, set_precision
+from shapely import area, box, get_num_coordinates, intersection, set_precision
 
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
@@ -72,6 +72,17 @@ DENSITY_CAP_MIN_CENSUS = 5.0
 # overlay across all validated tasks, while single-unit/coastline borders
 # still pay nothing.
 BORDER_DILATION_WINDOW = 5
+# Border-pixel intersections re-traverse a unit's WHOLE geometry per pixel, so
+# vertex-dense coastline units (Fiordland, the Alaska panhandle, Greenland)
+# dominate task runtime: NZL Southland (26 units) spent 19.3 of its ~20 task
+# minutes in build_overlay_skeleton (measured 2026-09-17); GRL's skeletons
+# alone ran 2.2-3.5h in the dilation study. Shapes above this vertex count are
+# recursively bisected into pieces at most this large before the border join
+# (the ST_Subdivide pattern): each pixel then intersects a small local piece,
+# and per-(pixel, shape) areas are re-summed so the result is exact regardless
+# of where the cuts fall. Shapes at or under the threshold pass through
+# untouched -- typical censuses pay nothing.
+OVERLAY_SUBDIVIDE_MAX_VERTICES = 2_000
 
 ADMIN_EXCLUSIONS = {
     "ARG": [
@@ -355,7 +366,56 @@ def process_census_data(
     prediction_data: pd.DataFrame | None = None
     shape_ids: "pd.Series[Any] | None" = None
     pooling_ids: "pd.Series[Any] | None" = None
-    if task_map["population_total"] == 0:
+    zero_pop_task = bool(task_map["population_total"] == 0)
+    if zero_pop_task:
+        # A zero task total can mean two different things, and only the UNITS
+        # distinguish them: real zero counts (census asserts 0 -> write the
+        # zero footprint) vs entirely unenumerated units whose NaNs summed to
+        # 0 upstream (census asserts NOTHING -> write all-nodata so the splice
+        # falls back to the GBD-raked surface; CAN 2021: 11 whole-reserve
+        # tasks are this).
+        unit_pops = pm_data.load_census_data(
+            task_map["iso3"],
+            task_map["census_time_point"].split("q")[0],
+            bounds=task_map["geometry"],
+        )
+        unit_pops = unit_pops.loc[
+            unit_pops["admin_level"] == unit_pops["admin_level"].max()
+        ]
+        unit_pops = unit_pops.loc[
+            unit_pops["path_to_top_parent"].apply(
+                lambda x: x.split(",")[task_map["task_parent_level"]]
+                == task_map["task_parent_id"]
+            ),
+            "population_total",
+        ]
+        if len(unit_pops) and unit_pops.isna().all():
+            print(
+                f"all {len(unit_pops)} units unenumerated (no census "
+                "statement); writing all-nodata for GBD fallback at the splice"
+            )
+            prediction_raster = rt.merge([
+                pm_data.load_raw_prediction(block_key, model_time_points[0], model_spec)
+                for block_key in block_keys
+            ])
+            template_raster = rt.RasterArray(
+                np.full((1, 1), np.nan, dtype=np.float32),
+                transform=prediction_raster.transform,
+                crs=prediction_raster.crs,
+                no_data_value=np.nan,
+            )
+            return None, None, template_raster, None, None
+        if unit_pops.isna().any():
+            # Mixed real-zero and unenumerated units under a zero-total
+            # parent: fall through to the populated path, which drops the
+            # unenumerated units and overlays the rest. CAVEAT (review
+            # 2026-09-17): such a task runs the full overlay on the EMPTY
+            # memory slope (build_task_resources sizes by population_total >
+            # 0), up to ~6x under-modeled for a large parent. No census
+            # currently has one (checked CAN 2021, the only NaN census); if a
+            # future census does and the task OOMs, size it as populated.
+            zero_pop_task = False
+    if zero_pop_task:
         # Footprint from one time point only; relies on the time-invariant water
         # mask documented in this function's docstring.
         prediction_raster = rt.merge([
@@ -404,6 +464,43 @@ def process_census_data(
         census_data = census_data.loc[
             census_data["path_to_top_parent"].apply(lambda x: x.split(",")[task_map["task_parent_level"]] == task_map["task_parent_id"])
         ]
+        # Unenumerated units (NaN population_total; CAN 2021 has 843 such
+        # blocks of 498k -- incompletely enumerated First Nations reserves,
+        # the only in-window census with any) are DROPPED from the overlay: a
+        # withheld count is no census statement, not a statement of zero, so
+        # their pixels are written as nodata and the final splice
+        # (merge-first in postprocess.rake) falls back to the GBD-raked model
+        # surface there -- residents are placed on their real footprint and
+        # counted toward the GBD envelope at the reserve, not smeared over
+        # the rest of the location. Verified consistent with the census's own
+        # accounting: declared totals equal non-NaN children sums at every
+        # ancestor level (gap = 0 people in all 33 affected admin2
+        # divisions), so dropping them removes nobody the census counted.
+        # The pre-stage's parent masses and cap families already exclude NaN.
+        n_nan = int(census_data["population_total"].isna().sum())
+        if n_nan:
+            print(
+                f"dropping {n_nan} unenumerated units (no census statement); "
+                "their pixels fall back to the GBD-raked surface at the splice"
+            )
+            census_data = census_data.loc[census_data["population_total"].notna()]
+        if census_data.empty:
+            # Every unit in this task is unenumerated: the census asserts
+            # nothing anywhere here. Write the minimal all-nodata raster (the
+            # splice loader drops it), exactly like a task with no predicted
+            # pixels.
+            prediction_raster = rt.merge([
+                pm_data.load_raw_prediction(block_key, model_time_points[0], model_spec)
+                for block_key in block_keys
+            ])
+            template_raster = rt.RasterArray(
+                np.full((1, 1), np.nan, dtype=np.float32),
+                transform=prediction_raster.transform,
+                crs=prediction_raster.crs,
+                no_data_value=np.nan,
+            )
+            return None, None, template_raster, None, None
+
         # Row order defines the integer shape codes used everywhere downstream;
         # capture ids and semantic pooling parents before the column filter.
         pooling_ids = (
@@ -702,6 +799,50 @@ def compute_shape_values(
     return factors, shape_table
 
 
+def _subdivide_geometry(geometry: Any, max_vertices: int) -> list[Any]:
+    """Recursively bisect a polygon until every piece has <= max_vertices.
+
+    Bisection is along the longer bbox axis with an exact intersection (never
+    clip_by_rect, whose output may be invalid -- areas must be trustworthy).
+    Extent halves every level, so the loop terminates even for pathological
+    inputs (a degenerate-extent piece is emitted as-is). Pieces may be
+    GeometryCollections containing boundary lines; those contribute zero area
+    downstream and are filtered there.
+    """
+    stack = [geometry]
+    pieces = []
+    while stack:
+        g = stack.pop()
+        minx, miny, maxx, maxy = g.bounds
+        if (
+            get_num_coordinates(g) <= max_vertices
+            or (maxx - minx) <= 0
+            or (maxy - miny) <= 0
+        ):
+            pieces.append(g)
+            continue
+        if (maxx - minx) >= (maxy - miny):
+            xm = (minx + maxx) / 2
+            if not (minx < xm < maxx):
+                # Float-limit extent: the midpoint rounds onto an endpoint, so
+                # a cut cannot strictly separate -- emit as-is rather than
+                # cycling forever (a silent in-task hang otherwise).
+                pieces.append(g)
+                continue
+            halves = (box(minx, miny, xm, maxy), box(xm, miny, maxx, maxy))
+        else:
+            ym = (miny + maxy) / 2
+            if not (miny < ym < maxy):
+                pieces.append(g)
+                continue
+            halves = (box(minx, miny, maxx, ym), box(minx, ym, maxx, maxy))
+        for half in halves:
+            piece = intersection(g, half)
+            if not piece.is_empty:
+                stack.append(piece)
+    return pieces
+
+
 def build_overlay_skeleton(
     census_data: gpd.GeoDataFrame,
     template_raster: rt.RasterArray,
@@ -819,18 +960,46 @@ def build_overlay_skeleton(
         # vectorized and take the area. This avoids geopandas.overlay's noding/
         # polygonize machinery, which is far slower on convoluted boundaries;
         # zero-area (line/point) intersections drop out via the area > 0 filter.
-        shapes = census[["shape_id", "geometry"]].reset_index(drop=True)
-        joined = gpd.sjoin(border_pixels, shapes, predicate="intersects", how="inner")
-        shape_geom = shapes.geometry.to_numpy()[joined["index_right"].to_numpy()]
-        isection_area = area(intersection(joined.geometry.to_numpy(), shape_geom))
-        # index_right is the positional index into ``shapes`` (== census row), i.e. the
-        # same integer shape code the interior pixels carry.
+        # Vertex-dense shapes are subdivided first (see
+        # OVERLAY_SUBDIVIDE_MAX_VERTICES): a border pixel then intersects a
+        # small local piece instead of, say, all of Fiordland per pixel.
+        piece_geoms: list[Any] = []
+        piece_codes: list[int] = []
+        subdivided = False
+        for code, geometry in enumerate(census.geometry.to_numpy()):
+            if get_num_coordinates(geometry) <= OVERLAY_SUBDIVIDE_MAX_VERTICES:
+                piece_geoms.append(geometry)
+                piece_codes.append(code)
+            else:
+                subdivided = True
+                for piece in _subdivide_geometry(geometry, OVERLAY_SUBDIVIDE_MAX_VERTICES):
+                    piece_geoms.append(piece)
+                    piece_codes.append(code)
+        pieces = gpd.GeoDataFrame(
+            {"code": np.array(piece_codes, dtype=np.int64)},
+            geometry=piece_geoms,
+            crs=crs,
+        )
+        joined = gpd.sjoin(border_pixels, pieces, predicate="intersects", how="inner")
+        piece_geom = pieces.geometry.to_numpy()[joined["index_right"].to_numpy()]
+        isection_area = area(intersection(joined.geometry.to_numpy(), piece_geom))
+        # ``code`` is the positional index into ``census``, i.e. the same
+        # integer shape code the interior pixels carry.
         border = pd.DataFrame({
             "pixel_id": joined["pixel_id"].to_numpy(),
-            "shape_id": joined["index_right"].to_numpy().astype(id_dtype),
-            "isection_area": isection_area.astype(np.float32),
+            "shape_id": joined["code"].to_numpy().astype(id_dtype),
+            "isection_area": isection_area,
         })
         border = border[border["isection_area"] > 0]
+        if subdivided:
+            # A pixel's overlap with one shape can split across that shape's
+            # pieces (cuts fall anywhere); re-sum in float64 so the result is
+            # exact regardless of the cut placement.
+            border = (
+                border.groupby(["pixel_id", "shape_id"], as_index=False)
+                .agg({"isection_area": "sum"})
+            )
+        border["isection_area"] = border["isection_area"].astype(np.float32)
     else:
         border = pd.DataFrame({
             "pixel_id": np.array([], dtype=np.int64),

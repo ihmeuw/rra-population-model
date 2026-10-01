@@ -760,7 +760,11 @@ class PopulationModelData:
         self,
         model_spec: "ModelSpecification",
     ) -> None:
-        self.make_model_version_root(model_spec.resolution, model_spec.model_version)
+        # The version directory is reserved at launch (train.utils.reserve_versions),
+        # so it already exists here.
+        self.make_model_version_root(
+            model_spec.resolution, model_spec.model_version, exist_ok=True
+        )
         path = self.model_specification_path(
             model_spec.resolution, model_spec.model_version
         )

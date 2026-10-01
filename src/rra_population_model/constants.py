@@ -32,7 +32,15 @@ class BuiltVersion(BaseModel):
     # Narrowed to what BUILT_VERSIONS actually declares. v6 and v7 were dropped
     # with their entries; "obm"/"20250404" are here for the OBM built version.
     provider: Literal["ghsl", "microsoft", "obm"]
-    version: Literal["v7_1", "v8", "r2023a", "20250404"]
+    version: Literal[
+        "v7_1",
+        "v8",
+        "r2023a",
+        "20250404",
+        "20250404inhall",
+        "20250404inhnres",
+        "20250404inhind",
+    ]
     time_points: list[str]
     measures: list[str]
     # Which ProcessingStrategy subclass builds this version's own measures, by
@@ -46,6 +54,12 @@ class BuiltVersion(BaseModel):
     # registered version, four of which OBM does not produce, so it is opted out
     # rather than left to fail on the first missing raster.
     geospatial_averages: bool = True
+    # OBM only: the parents whose zone-inherited footprints are relabelled as
+    # `unknown` before anything is derived, so GHSL credits them instead of their
+    # inherited label deciding them outright. Empty means every parent keeps
+    # both halves, which reproduces the unsplit covariate. See
+    # obm.load_parent_densities.
+    obm_inherited_to_unknown: list[str] = []
 
     @property
     def name(self) -> str:
@@ -150,6 +164,81 @@ BUILT_VERSIONS = {
         strategy="ObmStrategy",
         geospatial_averages=False,
     ),
+    # The same snapshot with some zone-inherited labels turned back into
+    # `unknown`. A label OBM took from the land-use zone a footprint sits in,
+    # rather than from the building itself, is the weakest it has, and in the
+    # OBM-vs-GHSL loss countries those labels carry most of the volume OBM
+    # removes from cities. Each version differs from `obm_20250404` only in
+    # `obm_inherited_to_unknown`:
+    #   inhall   every inherited label
+    #   inhnres  every inherited non-residential label; inherited housing stays
+    #   inhind   inherited industrial only
+    # The names are literals for the same reason as `obm_20250404`'s; the
+    # parent lists are restated rather than taken from OBM_PARENTS, which is
+    # defined below. The validator on OBM_BUILT_VERSIONS checks them.
+    "obm_20250404inhall": BuiltVersion(
+        provider="obm",
+        version="20250404inhall",
+        time_points=["2025q2"],
+        measures=[
+            "density",
+            "height",
+            "volume",
+            "residential_volume",
+            "proportion_residential",
+            "p_observed",
+        ],
+        strategy="ObmStrategy",
+        geospatial_averages=False,
+        obm_inherited_to_unknown=[
+            "residential_mu",
+            "commercial",
+            "industrial",
+            "agriculture",
+            "government",
+            "education",
+            "assembly",
+        ],
+    ),
+    "obm_20250404inhnres": BuiltVersion(
+        provider="obm",
+        version="20250404inhnres",
+        time_points=["2025q2"],
+        measures=[
+            "density",
+            "height",
+            "volume",
+            "residential_volume",
+            "proportion_residential",
+            "p_observed",
+        ],
+        strategy="ObmStrategy",
+        geospatial_averages=False,
+        obm_inherited_to_unknown=[
+            "commercial",
+            "industrial",
+            "agriculture",
+            "government",
+            "education",
+            "assembly",
+        ],
+    ),
+    "obm_20250404inhind": BuiltVersion(
+        provider="obm",
+        version="20250404inhind",
+        time_points=["2025q2"],
+        measures=[
+            "density",
+            "height",
+            "volume",
+            "residential_volume",
+            "proportion_residential",
+            "p_observed",
+        ],
+        strategy="ObmStrategy",
+        geospatial_averages=False,
+        obm_inherited_to_unknown=["industrial"],
+    ),
 }
 
 # A denominator is a single named raster the model divides population by, so
@@ -189,7 +278,12 @@ DENOMINATORS = [
         for provider in ("ghsl_r2023a", "microsoft_v8")
         for measure in ("density", "volume", "residential_volume")
     ),
-    "microsoft_v8_obm_20250404_residential_volume",
+    # One Microsoft-v8-with-OBM product per OBM version; see MSFT_V8_OBM_PROVIDERS.
+    *(
+        f"microsoft_v8_obm_{v.version}_residential_volume"
+        for v in BUILT_VERSIONS.values()
+        if v.provider == "obm"
+    ),
 ]
 
 
@@ -237,6 +331,27 @@ OBM_NONRESIDENTIAL_PARENTS = [
     p for p in OBM_PARENTS if p not in ("residential_mu", "unknown")
 ]
 
+# The covariate splits every labelled parent by where its label came from, and
+# writes `{parent}_{source}_{measure}.tif`; `unknown` has no label and is written
+# whole, as `unknown_{measure}.tif`.
+#   tagged     the footprint's own label: its OSM building tag, a point of
+#              interest, or another OBM rule
+#   inherited  taken from the OSM land-use zone the footprint sits in
+# The rule that assigns them lives in rra-population-covariates
+# (extract/open_building_map_label_source.py).
+OBM_LABEL_SOURCES = ["tagged", "inherited"]
+OBM_LABELLED_PARENTS = [p for p in OBM_PARENTS if p != "unknown"]
+
+# Every registered OBM snapshot variant, by provider name.
+OBM_BUILT_VERSIONS = {
+    v.name: v for v in BUILT_VERSIONS.values() if v.provider == "obm"
+}
+for _v in OBM_BUILT_VERSIONS.values():
+    _bad = sorted(set(_v.obm_inherited_to_unknown) - set(OBM_LABELLED_PARENTS))
+    if _bad:
+        msg = f"{_v.name}: obm_inherited_to_unknown names unknown parents {_bad}"
+        raise ValueError(msg)
+
 # GHSL's ANBH is continuous metres with no concept of a storey, but it has a hard
 # empirical floor: the minimum non-zero value is ~2.486 m with the low-rise mass
 # at ~2.50 m. We impute one storey wherever OBM sees a footprint and GHSL sees no
@@ -272,6 +387,12 @@ OBM_RESCALE_TOLERANCE = 1e-6
 # to the OBM snapshot that supplied its residential split, and a future snapshot
 # should not silently overwrite it.
 MSFT_V8_OBM_PROVIDER = f"microsoft_v8_obm_{OBM_VERSION.replace('-', '')}"
+# One such product per OBM version, keyed by its provider name and mapping to
+# the OBM provider that supplies its residential fraction. The canonical entry
+# is MSFT_V8_OBM_PROVIDER -> OBM_PROVIDER.
+MSFT_V8_OBM_PROVIDERS = {
+    f"microsoft_v8_obm_{v.version}": name for name, v in OBM_BUILT_VERSIONS.items()
+}
 MSFT_V8_SOURCE_PROVIDER = "microsoft_v8"
 # Priority order for the residential fraction. First source with a building in
 # the pixel wins; if none has one, the fraction falls back to fully residential,

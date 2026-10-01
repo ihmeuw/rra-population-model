@@ -23,6 +23,10 @@ from rra_population_model.model_prep.features.overture import process_overture
 #
 # Keyed by resolution. v6, v7 and v7_1 are gone from pmc.BUILT_VERSIONS, so
 # naming them here would raise a KeyError rather than silently skip them.
+#
+# Only the canonical OBM version is built by the general command. The variants
+# in pmc.OBM_BUILT_VERSIONS are built one at a time with `obm_features
+# --obm-version` and `msft_obm_features --provider`.
 BUILT_VERSIONS = {
     '40': [
         pmc.BUILT_VERSIONS["ghsl_r2023a"],
@@ -175,6 +179,7 @@ def obm_features_main(
     resolution: str,
     building_density_dir: str | Path,
     model_root: str | Path,
+    obm_version: str = pmc.OBM_PROVIDER,
 ) -> None:
     """Build only the OBM features for one block, at the canonical time point.
 
@@ -182,12 +187,15 @@ def obm_features_main(
     so the two cannot produce different rasters. It exists because rebuilding
     OBM alone is common and running the full feature set to do it would also
     rewrite every other provider.
+
+    `obm_version` picks which OBM built version to write; each writes under its
+    own provider name, so building one never touches another's rasters.
     """
-    print(f"Processing OBM features for block {block_key}")
+    print(f"Processing {obm_version} features for block {block_key}")
     bd_data = BuildingDensityData(building_density_dir)
     pm_data = PopulationModelData(model_root)
 
-    built_version = pmc.OBM_BUILT_VERSION
+    built_version = pmc.OBM_BUILT_VERSIONS[obm_version]
     feature_metadata = get_feature_metadata(
         pm_data, bd_data, resolution, block_key, built_version.time_points[0]
     )
@@ -209,35 +217,41 @@ def obm_features_main(
 @click.command()
 @clio.with_block_key()
 @clio.with_resolution()
+@clio.with_obm_version()
 @clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def obm_features_task(
     block_key: str,
     resolution: str,
+    obm_version: str,
     building_density_dir: str,
     output_dir: str,
 ) -> None:
     """Build the OBM features for a given block."""
-    obm_features_main(block_key, resolution, building_density_dir, output_dir)
+    obm_features_main(
+        block_key, resolution, building_density_dir, output_dir, obm_version
+    )
 
 
 @click.command()
 @clio.with_resolution()
+@clio.with_obm_version()
 @clio.with_input_directory("building-density", pmc.BUILDING_DENSITY_ROOT)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def obm_features(
     resolution: str,
+    obm_version: str,
     building_density_dir: str,
     output_dir: str,
     queue: str,
 ) -> None:
-    """Prepare the Open Building Map features."""
+    """Prepare the Open Building Map features for one OBM built version."""
     pm_data = PopulationModelData(output_dir)
     # Only blocks with OBM coverage exist, and that set is already the right one;
     # the modeling frame is a superset.
     block_keys = pm_data.list_open_building_map_blocks(resolution)
-    print(f"Submitting {len(block_keys)} jobs to process OBM features")
+    print(f"Submitting {len(block_keys)} jobs to process {obm_version} features")
 
     jobmon.run_parallel(
         runner="pmtask model_prep",
@@ -249,6 +263,7 @@ def obm_features(
             "building-density-dir": building_density_dir,
             "output-dir": output_dir,
             "resolution": resolution,
+            "obm-version": obm_version,
         },
         task_resources={
             "queue": queue,
@@ -262,12 +277,17 @@ def obm_features(
             # anything in that run would be killed rather than slowed. Slurm
             # enforces memory as a hard cap and the retry would hit the same
             # ceiling, so raise this before assuming a failure is transient.
-            "memory": "11G",
-            "runtime": "5m",
+            #
+            # The label-source split doubles the reads (15 layers, not 8) but
+            # not the resident arrays, which are still eight parent
+            # accumulators; the extra is one layer in flight. Raised to 13G and
+            # 10m until a split run has been profiled.
+            "memory": "13G",
+            "runtime": "10m",
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },
-        log_root=pm_data.log_dir("preprocess_obm_features"),
+        log_root=pm_data.log_dir(f"preprocess_obm_features_{obm_version}"),
         max_attempts=3,
     )
 
@@ -277,14 +297,22 @@ def msft_obm_features_main(
     time_point: str,
     resolution: str,
     model_root: str | Path,
+    provider: str = pmc.MSFT_V8_OBM_PROVIDER,
 ) -> None:
-    """Build only the Microsoft-v8-with-OBM features for one block/time point."""
+    """Build only the Microsoft-v8-with-OBM features for one block/time point.
+
+    `provider` picks the product; its residential fraction comes from the OBM
+    version it maps to in pmc.MSFT_V8_OBM_PROVIDERS, then GHSL, then the
+    fully-residential fallback - the same priority as the canonical product.
+    """
     pm_data = PopulationModelData(model_root)
     process_msft_obm(
         pm_data=pm_data,
         resolution=resolution,
         block_key=block_key,
         time_point=time_point,
+        sources=(pmc.MSFT_V8_OBM_PROVIDERS[provider], *pmc.MSFT_V8_OBM_P_SOURCES[1:]),
+        provider=provider,
     )
 
 
@@ -292,15 +320,17 @@ def msft_obm_features_main(
 @clio.with_block_key()
 @clio.with_time_point()
 @clio.with_resolution()
+@clio.with_msft_obm_provider()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 def msft_obm_features_task(
     block_key: str,
     time_point: str,
     resolution: str,
+    provider: str,
     output_dir: str,
 ) -> None:
     """Build the Microsoft-v8-with-OBM features for a given block."""
-    msft_obm_features_main(block_key, time_point, resolution, output_dir)
+    msft_obm_features_main(block_key, time_point, resolution, output_dir, provider)
 
 
 @click.command()
@@ -309,15 +339,17 @@ def msft_obm_features_task(
     allow_all=True,
 )
 @clio.with_resolution()
+@clio.with_msft_obm_provider()
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_queue()
 def msft_obm_features(
     time_point: list[str],
     resolution: str,
+    provider: str,
     output_dir: str,
     queue: str,
 ) -> None:
-    """Prepare Microsoft v8 with the OBM residential split."""
+    """Prepare Microsoft v8 with the OBM residential split, for one product."""
     pm_data = PopulationModelData(output_dir)
     modeling_frame = pm_data.load_modeling_frame(resolution)
     block_keys = modeling_frame.block_key.unique().tolist()
@@ -333,7 +365,11 @@ def msft_obm_features(
         runner="pmtask model_prep",
         task_name="msft_obm_features",
         node_args={"block-key": block_keys, "time-point": time_point},
-        task_args={"output-dir": output_dir, "resolution": resolution},
+        task_args={
+            "output-dir": output_dir,
+            "resolution": resolution,
+            "provider": provider,
+        },
         task_resources={
             "queue": queue,
             "cores": 1,
@@ -344,7 +380,7 @@ def msft_obm_features(
             "project": "proj_rapidresponse",
             "constraints": "archive",
         },
-        log_root=pm_data.log_dir("preprocess_msft_obm_features"),
+        log_root=pm_data.log_dir(f"preprocess_msft_obm_features_{provider}"),
         max_attempts=3,
     )
 

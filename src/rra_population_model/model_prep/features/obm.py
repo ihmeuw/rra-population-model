@@ -1,8 +1,11 @@
 """Derive the Open Building Map measures from the OBM covariate rasters.
 
-The covariate ships eight parent building types x two measures per block. This
-module collapses those into the six measures the model consumes, mirroring the
-shape of `ghsl_r2023a` and `microsoft_v8`:
+The covariate ships seven labelled parent building types, each split into a
+`tagged` and an `inherited` layer, plus `unknown`, at two measures per block.
+`load_parent_densities` recombines those into the eight parents according to the
+built version's `obm_inherited_to_unknown`, and the rest of this module collapses
+the parents into the six measures the model consumes, mirroring the shape of
+`ghsl_r2023a` and `microsoft_v8`:
 
     {provider}_density
     {provider}_height
@@ -35,31 +38,54 @@ def load_parent_densities(
     pm_data: PopulationModelData,
     resolution: str,
     block_key: str,
+    inherited_to_unknown: list[str] | None = None,
 ) -> tuple[dict[str, NDArray[np.float64]], NDArray[np.bool_], rt.RasterArray]:
-    """Read the eight parent density rasters and the shared land mask.
+    """Read the label-source density rasters and recombine them into parents.
 
-    All eight share one nodata mask, so any of them defines the land domain.
+    The covariate writes each labelled parent as two layers, `{parent}_tagged`
+    and `{parent}_inherited`, and `unknown` whole. Each layer is added into its
+    parent, except that the inherited layer of every parent in
+    `inherited_to_unknown` is added into `unknown` instead: those footprints
+    lose their zone-inherited label and are credited like any other unlabelled
+    footprint. With nothing named, every parent gets both halves back, which
+    reproduces the unsplit covariate.
+
+    "Reproduces" up to one thing. The unsplit covariate rasterized a parent in
+    one pass, so overlapping footprints of that parent were unioned; split, a
+    tagged and an inherited footprint of the same parent that overlap are
+    counted once in each half. The covariate's own check measured this at 109
+    of 4.8M built pixels on the Kigali block, all positive. Any pixel it pushes
+    above 1 is caught by the rescale in `derive_features`.
+
+    Layers are accumulated into the eight parent arrays as they are read rather
+    than all held at once: fifteen 8192^2 float64 layers would double peak
+    memory for no benefit. All layers share one nodata mask, so `unknown`, the
+    one layer every version reads, defines the land domain.
     """
-    template = pm_data.load_open_building_map_covariate(
-        resolution=resolution,
-        block_key=block_key,
-        parent_building_type=pmc.OBM_PARENTS[0],
-        measure="density",
-    )
+    move = set(inherited_to_unknown or ())
+
+    def load(layer: str) -> rt.RasterArray:
+        return pm_data.load_open_building_map_covariate(
+            resolution=resolution,
+            block_key=block_key,
+            parent_building_type=layer,
+            measure="density",
+        )
+
+    template = load("unknown")
     land = ~np.isnan(template.to_numpy())
 
-    density = {}
-    for parent in pmc.OBM_PARENTS:
-        if parent == pmc.OBM_PARENTS[0]:
-            raster = template
-        else:
-            raster = pm_data.load_open_building_map_covariate(
-                resolution=resolution,
-                block_key=block_key,
-                parent_building_type=parent,
-                measure="density",
+    density = {
+        parent: np.zeros(land.shape, dtype=np.float64) for parent in pmc.OBM_PARENTS
+    }
+    density["unknown"] += np.nan_to_num(template.to_numpy()).astype(np.float64)
+    for parent in pmc.OBM_LABELLED_PARENTS:
+        for source in pmc.OBM_LABEL_SOURCES:
+            target = (
+                "unknown" if source == "inherited" and parent in move else parent
             )
-        density[parent] = np.nan_to_num(raster.to_numpy()).astype(np.float64)
+            layer = load(f"{parent}_{source}").to_numpy()
+            density[target] += np.nan_to_num(layer).astype(np.float64)
 
     return density, land, template
 

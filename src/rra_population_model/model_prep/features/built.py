@@ -209,6 +209,11 @@ class ObmStrategy(ProcessStrategy):
 
     Everything after that is inherited unchanged - in particular the symlink
     fan-out, which for a single-epoch version fills all 69 other time points.
+
+    Every OBM version runs through here. They differ only in which parents'
+    zone-inherited footprints are relabelled `unknown` on the way in - the
+    version's `obm_inherited_to_unknown` - and in the provider name they write
+    under.
     """
 
     def generate_measures(
@@ -223,9 +228,13 @@ class ObmStrategy(ProcessStrategy):
             print(f"No OBM coverage for block {block_key}; skipping.")
             return {}
 
-        print(f"Loading OBM parent densities for {block_key}")
+        inherited_to_unknown = self.built_version.obm_inherited_to_unknown
+        print(
+            f"Loading OBM parent densities for {block_key}; inherited labels "
+            f"moved to unknown: {inherited_to_unknown or 'none'}"
+        )
         density, land, template = obm.load_parent_densities(
-            pm_data, resolution, block_key
+            pm_data, resolution, block_key, inherited_to_unknown
         )
         built = land & (obm.sum_parents(density, pmc.OBM_PARENTS) > 0)
 
@@ -362,8 +371,8 @@ STRATEGIES: dict[str, type[ProcessStrategy]] = {
 }
 
 # Versions that write every measure they have, so nothing is derived from them.
-# GHSL ships its full set; OBM's ObmStrategy writes all six itself.
-NO_DERIVED_MEASURES = frozenset({"ghsl_r2023a", pmc.OBM_PROVIDER})
+# GHSL ships its full set; every OBM version's ObmStrategy writes all six itself.
+NO_DERIVED_MEASURES = frozenset({"ghsl_r2023a", *pmc.OBM_BUILT_VERSIONS})
 
 HEIGHT_MIN = 2.4384  # 8ft
 

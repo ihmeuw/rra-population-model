@@ -31,8 +31,15 @@ def train_main(
 ) -> None:
     pm_data = PopulationModelData(output_root)
     version_root = pm_data.model_version_root(resolution, version)
+    # Clear what a previous attempt left, but keep the directory itself: it is
+    # the version's reservation (see utils.reserve_versions), and removing it
+    # would let a concurrent launch claim the same number.
     if version_root.exists():
-        shutil.rmtree(version_root)
+        for child in version_root.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
 
     # First generate the model specification and mint a new version directory
     print("Setting up model specification")
@@ -155,10 +162,12 @@ def train(
     # ##########################
 
     pm_data = PopulationModelData(output_dir)
-    today, last_version = utils.get_last_run_version(pm_data.model_root(resolution))
+    combinations = list(itertools.product(denominator, ntl_option, ga_option))
+    # Reserved now, before submission, so launches started seconds apart can't
+    # pick the same version.
+    versions = utils.reserve_versions(pm_data.model_root(resolution), len(combinations))
     node_args = []
-    for i, (denom, ntl, ga) in enumerate(itertools.product(denominator, ntl_option, ga_option)):
-        version = f"{today}.{last_version + i + 1:03d}"
+    for version, (denom, ntl, ga) in zip(versions, combinations, strict=True):
         print(f"{version}: {denom} {ntl} {ga}")
         node_args.append((version, denom, ntl, ga))
 

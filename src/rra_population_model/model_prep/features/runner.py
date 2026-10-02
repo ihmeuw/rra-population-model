@@ -58,6 +58,13 @@ def features_main(
     )
 
     for built_version in BUILT_VERSIONS[resolution]:
+        if (
+            built_version.provider == "obm"
+            and built_version.name not in pmc.OBM_BUILDABLE_VERSIONS
+        ):
+            # See pmc.OBM_BUILDABLE_VERSIONS: rebuilding would overwrite it.
+            print(f"Skipping {built_version.name}: not buildable from the current covariate run")
+            continue
         print(f"Processing {built_version.name}")
         strategy, fill_time_points = get_processing_strategy(
             built_version, feature_metadata
@@ -88,6 +95,9 @@ def features_main(
 
     # Must follow OBM: it reads the residential fraction OBM just wrote (or the
     # symlink an earlier canonical run left at this time point).
+    if pmc.MSFT_V8_OBM_PROVIDER not in pmc.MSFT_V8_OBM_BUILDABLE_PROVIDERS:
+        print(f"Skipping {pmc.MSFT_V8_OBM_PROVIDER}: not buildable from the current covariate run")
+        return
     print("Processing Microsoft v8 with the OBM residential split")
     process_msft_obm(
         pm_data=pm_data,

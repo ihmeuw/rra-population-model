@@ -149,6 +149,12 @@ def process_msft_obm(
     provider: str = pmc.MSFT_V8_OBM_PROVIDER,
 ) -> None:
     """Build and link the Microsoft-v8-with-OBM layers for one block."""
+    if provider not in pmc.MSFT_V8_OBM_BUILDABLE_PROVIDERS:
+        msg = (
+            f"{provider} is not in pmc.MSFT_V8_OBM_BUILDABLE_PROVIDERS: building it "
+            "would overwrite its features with the current covariate run."
+        )
+        raise ValueError(msg)
     src = pmc.MSFT_V8_SOURCE_PROVIDER
     if not pm_data.feature_exists(
         resolution=resolution, block_key=block_key, time_point=time_point,

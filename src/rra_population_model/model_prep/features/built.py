@@ -221,6 +221,13 @@ class ObmStrategy(ProcessStrategy):
     ) -> dict[str, Path]:
         block_key = self.feature_metadata.block_key
         resolution = self.feature_metadata.resolution
+        # The CLI only offers buildable versions; this also stops a direct call.
+        if self.built_version.name not in pmc.OBM_BUILDABLE_VERSIONS:
+            msg = (
+                f"{self.built_version.name} is not in pmc.OBM_BUILDABLE_VERSIONS: "
+                "building it would overwrite its features with the current covariate run."
+            )
+            raise ValueError(msg)
         covariate_root = (
             pm_data.open_building_map_covariates / f"{resolution}m" / block_key
         )

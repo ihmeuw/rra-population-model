@@ -169,22 +169,22 @@ def with_tile_key[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
 
 
 def with_obm_version[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
-    # Required, with no ALL: every OBM version writes under its own provider
-    # name, and rebuilding `obm_20250404` would overwrite the features models
-    # have already been trained on. Naming it has to be deliberate.
+    # Required, with no ALL, and limited to pmc.OBM_BUILDABLE_VERSIONS: the
+    # older versions would be rebuilt from the current covariate run under their
+    # old names, overwriting the features earlier models were trained on.
     return click.option(
         "--obm-version",
-        type=click.Choice(list(pmc.OBM_BUILT_VERSIONS)),
+        type=click.Choice(pmc.OBM_BUILDABLE_VERSIONS),
         required=True,
         help="OBM built version to build.",
     )
 
 
 def with_msft_obm_provider[**P, T]() -> Callable[[Callable[P, T]], Callable[P, T]]:
-    # Required, with no ALL, for the same reason as --obm-version.
+    # Required, with no ALL, and limited for the same reason as --obm-version.
     return click.option(
         "--provider",
-        type=click.Choice(list(pmc.MSFT_V8_OBM_PROVIDERS)),
+        type=click.Choice(pmc.MSFT_V8_OBM_BUILDABLE_PROVIDERS),
         required=True,
         help="Microsoft-v8-with-OBM product to build.",
     )

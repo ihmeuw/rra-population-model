@@ -40,6 +40,10 @@ class BuiltVersion(BaseModel):
         "20250404inhall",
         "20250404inhnres",
         "20250404inhind",
+        "20250404lr",
+        "20250404lrinhall",
+        "20250404lrinhnres",
+        "20250404lrinhind",
     ]
     time_points: list[str]
     measures: list[str]
@@ -241,6 +245,30 @@ BUILT_VERSIONS = {
     ),
 }
 
+# The same four built from run 3 of the OBM covariate, "lr" for label rules: group
+# quarters (barracks, prisons, care homes, residence halls) relabelled residential,
+# residential buildings with a ground-floor override made mixed use, mostly
+# residential mixed use split by floors, and the zone-derived share of each mixed
+# building counted as inherited. See HANDOFF_OBM_NEW_LABEL_RULES.md (claude/
+# rra_pop_model). Each copies its run-2 counterpart, so the inherited-to-unknown
+# rules cannot drift apart.
+#
+# All OBM versions read the one covariate path, which now holds run 3. Only the lr
+# versions should be built from here on: rebuilding obm_20250404 or an inh version
+# would overwrite its features with run 3 under a run-1 or run-2 name.
+for _base in [
+    "obm_20250404",
+    "obm_20250404inhall",
+    "obm_20250404inhnres",
+    "obm_20250404inhind",
+]:
+    _lr = BUILT_VERSIONS[_base].model_copy(
+        update={
+            "version": BUILT_VERSIONS[_base].version.replace("20250404", "20250404lr")
+        }
+    )
+    BUILT_VERSIONS[_lr.name] = _lr
+
 # A denominator is a single named raster the model divides population by, so
 # this is a list of raster names - not a property of BUILT_VERSIONS. It was a
 # cross-product of the two, which cannot express either half of what is here:
@@ -352,6 +380,29 @@ for _v in OBM_BUILT_VERSIONS.values():
         msg = f"{_v.name}: obm_inherited_to_unknown names unknown parents {_bad}"
         raise ValueError(msg)
 
+# The OBM versions whose features may be (re)built. Every OBM version reads the
+# one covariate path, `covariates/open_building_map/2025-04-04/`, and that path
+# holds whichever covariate run is current - now run 3, the new label rules. A
+# version built from it must therefore be one defined for run 3. Rebuilding an
+# older version would overwrite its features with run 3 data under its run 1
+# (`obm_20250404`) or run 2 (`obm_20250404inh*`) name, and the models trained on
+# them (2026_09_06.007, 2026_09_16.025, 2026_10_01.001-.003) could no longer be
+# reproduced. The older versions stay registered so their features and
+# denominators remain addressable; they just can't be built.
+#
+# TODO: revisit once a model is chosen to keep. This list then becomes that
+# model's version (and the covariate run it reads), and the rest can be retired.
+OBM_BUILDABLE_VERSIONS = [
+    "obm_20250404lr",
+    "obm_20250404lrinhall",
+    "obm_20250404lrinhnres",
+    "obm_20250404lrinhind",
+]
+_unregistered = sorted(set(OBM_BUILDABLE_VERSIONS) - set(OBM_BUILT_VERSIONS))
+if _unregistered:
+    msg = f"OBM_BUILDABLE_VERSIONS names unregistered versions {_unregistered}"
+    raise ValueError(msg)
+
 # GHSL's ANBH is continuous metres with no concept of a storey, but it has a hard
 # empirical floor: the minimum non-zero value is ~2.486 m with the low-rise mass
 # at ~2.50 m. We impute one storey wherever OBM sees a footprint and GHSL sees no
@@ -393,6 +444,13 @@ MSFT_V8_OBM_PROVIDER = f"microsoft_v8_obm_{OBM_VERSION.replace('-', '')}"
 MSFT_V8_OBM_PROVIDERS = {
     f"microsoft_v8_obm_{v.version}": name for name, v in OBM_BUILT_VERSIONS.items()
 }
+# The products that may be (re)built: those whose OBM version may be. See
+# OBM_BUILDABLE_VERSIONS, including its TODO.
+MSFT_V8_OBM_BUILDABLE_PROVIDERS = [
+    provider
+    for provider, obm_version in MSFT_V8_OBM_PROVIDERS.items()
+    if obm_version in OBM_BUILDABLE_VERSIONS
+]
 MSFT_V8_SOURCE_PROVIDER = "microsoft_v8"
 # Priority order for the residential fraction. First source with a building in
 # the pixel wins; if none has one, the fraction falls back to fully residential,

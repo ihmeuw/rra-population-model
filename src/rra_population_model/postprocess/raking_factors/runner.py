@@ -92,16 +92,20 @@ class AggregationArgs(NamedTuple):
 
 def aggregate_unraked_population(
     aggregate_args: AggregationArgs,
-) -> dict[int, tuple[float, float, float]]:
-    """Per-admin sums over one block: (raw, census, raw-under-census).
+) -> tuple[dict[int, tuple[float, float, float]], float]:
+    """Per-admin sums over one block: (raw, census, raw-under-census), plus the block's
+    census-layer total over every valid census pixel, inside or outside any admin mask.
 
     The initial stage only uses the raw sum. The final stage combines all three
     into the spliced-field sum: census + rf1 * (raw - raw_under_census) -- the
     census layer wins wherever it has valid data (matching the rake stage's
     ``merge first``), and rf1 is constant within an admin, so the multiplied
-    raster never needs to be materialized.
+    raster never needs to be materialized. The component sums and the block total
+    are persisted alongside the factors for the diagnostics stage (census coverage
+    per admin, fringe population, census mass that falls outside every GBD mask).
     """
     est_pop: dict[int, tuple[float, float, float]] = {}
+    block_census_total = 0.0
     (
         resolution,
         model_version,
@@ -114,7 +118,7 @@ def aggregate_unraked_population(
         census_weights,
     ) = aggregate_args
     if not shape_map:
-        return est_pop
+        return est_pop, block_census_total
 
     pm_data = PopulationModelData(output_dir)
     model_spec = pm_data.load_model_specification(resolution, model_version)
@@ -133,6 +137,7 @@ def aggregate_unraked_population(
         if census_layer is not None:
             cens_arr = paste_on_canvas(census_layer, r).to_numpy()
             cens_valid = ~np.isnan(cens_arr)
+            block_census_total = float(np.nansum(cens_arr))
 
     raw_arr = r.to_numpy()
     for location_id, geom in shape_map.items():
@@ -150,7 +155,7 @@ def aggregate_unraked_population(
             census_sum = float(np.nansum(cens_arr[covered]))
             raw_cens_sum = float(np.nansum(raw_arr[covered]))
         est_pop[location_id] = (raw_sum, census_sum, raw_cens_sum)
-    return est_pop
+    return est_pop, block_census_total
 
 
 def raking_factors_main(
@@ -221,7 +226,7 @@ def raking_factors_main(
 
     print("Collating aggregate population across blocks")
     aggregate_pops: dict[int, npt.NDArray[np.float64]] = defaultdict(lambda: np.zeros(3))
-    for pop_dict in aggregate_pops_by_block:
+    for pop_dict, _ in aggregate_pops_by_block:
         for location_id, sums in pop_dict.items():
             aggregate_pops[location_id] += np.asarray(sums)
 
@@ -283,8 +288,11 @@ def raking_factors_main(
     true_pop = combined["true"].to_dict()
     raking_factor = combined["raking_factor"].to_dict()
     raking_factors_by_block = []
-    for loc_args in tqdm.tqdm(compute_location_args, disable=not progress_bar):
+    for loc_args, (block_sums, block_census_total) in zip(
+        tqdm.tqdm(compute_location_args, disable=not progress_bar), aggregate_pops_by_block, strict=True
+    ):
         for location_id, geom in loc_args.shape_map.items():
+            block_raw, block_census, block_raw_census = block_sums.get(location_id, (0.0, 0.0, 0.0))
             raking_factors_by_block.append(
                 (
                     loc_args.block_key,
@@ -292,6 +300,10 @@ def raking_factors_main(
                     unraked_pop[location_id],
                     true_pop[location_id],
                     raking_factor[location_id],
+                    block_raw,
+                    block_census,
+                    block_raw_census,
+                    block_census_total,
                     geom,
                 )
             )
@@ -305,6 +317,12 @@ def raking_factors_main(
             "raw_pop",
             "true_pop",
             "raking_factor",
+            # per-(block, admin) component sums behind raw_pop, for the diagnostics stage;
+            # groupby("location_id").sum() reproduces the sums the factor was built from
+            "block_raw",
+            "block_census",
+            "block_raw_census",
+            "block_census_total",
             "geometry",
         ],
         crs=model_frame.crs,

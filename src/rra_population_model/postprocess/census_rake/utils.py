@@ -86,6 +86,7 @@ OVERLAY_SUBDIVIDE_MAX_VERTICES = 2_000
 
 ADMIN_EXCLUSIONS = {
     "ARG": [
+        "94021",  # Departamento Islas del Atlántico Sur (Falkland Islands and South Georgia)
         "94028",  # Antarctica
     ],
 }

@@ -1,7 +1,9 @@
 import concurrent.futures
 import gc
+import json
 import multiprocessing
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +16,12 @@ from rasterio import features
 from rra_tools import jobmon, parallel
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import geopandas as gpd
+import pyarrow.compute as pc  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
+import pyproj
 import shapely
 
 from rra_population_model import cli_options as clio
@@ -185,6 +191,93 @@ def census_rake_main(
         logger.info("Complete")
 
 
+# Rows per streamed census batch in the pre-stage block worker. A geopandas
+# bbox read only saves memory when row groups are spatially compact; the
+# census files' row groups span whole countries (USA: 9 groups of up to 1M
+# rows; GBR: ONE 232k-row group), so each worker decoded nearly the full
+# geometry column to pick out its block -- measured 2026-10-03 on
+# 2026_10_02.001: +13.9 GiB transient for USA's densest block, +3.7 GiB for
+# GBR's. Eight concurrent workers OOM'd every large census at 24G (the 2026-09
+# "fork deadlocks" were these OOM kills: a pathos pool hangs forever when a
+# worker is killed). Streaming in batches and rasterizing each batch's units
+# immediately bounds a worker to one batch of geometry -- but only with a
+# read buffer: at pyarrow's default (buffer_size=0) the reader first loads
+# each row group's whole compressed column chunk (GBR full pass: +2.21 GiB;
+# with an 8 MB buffer +0.66 GiB; materializing the row group +3.91 GiB --
+# probe_parquet_stream_memory.py, 2026-10-03).
+CENSUS_READ_BATCH_ROWS = 10_000
+CENSUS_READ_BUFFER_BYTES = 8 << 20
+
+
+def _iter_census_units_in_bounds(
+    path: Path,
+    bounds: tuple[float, float, float, float],
+    admin_level: int,
+    target_crs: Any,
+) -> Iterator[tuple[npt.NDArray[Any], npt.NDArray[Any]]]:
+    """Yield (shape_ids, geometries) for census units at ``admin_level`` whose
+    covering bbox intersects ``bounds``, in batches of bounded memory.
+
+    Row selection reproduces geopandas' covering-bbox filter exactly (keep
+    unless xmin > maxx, ymin > maxy, xmax < minx or ymax < miny), in file
+    order, so results match ``load_census_data(bounds=...)``; geometries are
+    returned in ``target_crs``. Row groups whose bbox statistics cannot
+    intersect are skipped without reading.
+    """
+    minx, miny, maxx, maxy = bounds
+    pf = pq.ParquetFile(path, buffer_size=CENSUS_READ_BUFFER_BYTES)
+    geo = json.loads(pf.schema_arrow.metadata[b"geo"])
+    column_meta = geo["columns"][geo["primary_column"]]
+    if column_meta.get("encoding", "WKB") != "WKB":
+        msg = f"{path}: expected WKB geometry encoding, got {column_meta['encoding']}"
+        raise ValueError(msg)
+    source_crs = pyproj.CRS.from_user_input(column_meta.get("crs", "OGC:CRS84"))
+    needs_transform = not source_crs.equals(pyproj.CRS.from_user_input(target_crs))
+
+    metadata = pf.metadata
+    paths = [metadata.schema.column(i).path for i in range(metadata.num_columns)]
+    stat_index = {k: paths.index(f"bbox.{k}") for k in ("xmin", "ymin", "xmax", "ymax")}
+    row_groups = []
+    for g in range(metadata.num_row_groups):
+        stats = {k: metadata.row_group(g).column(i).statistics for k, i in stat_index.items()}
+        if all(st is not None and st.has_min_max for st in stats.values()) and (
+            stats["xmin"].min > maxx
+            or stats["ymin"].min > maxy
+            or stats["xmax"].max < minx
+            or stats["ymax"].max < miny
+        ):
+            continue
+        row_groups.append(g)
+    if not row_groups:
+        return
+
+    for batch in pf.iter_batches(
+        batch_size=CENSUS_READ_BATCH_ROWS,
+        row_groups=row_groups,
+        columns=["shape_id", "admin_level", "bbox", "geometry"],
+        use_threads=False,
+    ):
+        bbox = batch.column("bbox")
+        disjoint = pc.or_kleene(
+            pc.or_kleene(
+                pc.greater(bbox.field("xmin"), maxx), pc.greater(bbox.field("ymin"), maxy)
+            ),
+            pc.or_kleene(
+                pc.less(bbox.field("xmax"), minx), pc.less(bbox.field("ymax"), miny)
+            ),
+        )
+        keep = pc.and_kleene(
+            pc.equal(batch.column("admin_level"), admin_level), pc.invert(disjoint)
+        )
+        if not pc.any(keep).as_py():
+            continue
+        kept = batch.filter(keep)
+        geometries = shapely.from_wkb(kept.column("geometry").to_numpy(zero_copy_only=False))
+        if needs_transform:
+            geometries = gpd.GeoSeries(geometries, crs=source_crs).to_crs(target_crs).to_numpy()
+        yield kept.column("shape_id").to_numpy(zero_copy_only=False), geometries
+
+
 def _census_rf_block_sums(
     args: tuple[
         str, str, str, str, str, list[tuple[str, shapely.Geometry]],
@@ -198,10 +291,11 @@ def _census_rf_block_sums(
         (RF_p denominator). Parent geometries arrive pre-clipped to the block's
         bounds; partial sums are added across blocks by the caller.
       * per most-detailed unit, the count of ON pixels (prediction > 0) at each
-        anchor-window quarter (the density-cap footprint). Units are bbox-read
-        here in the worker -- the whole-country census is too large to load
-        once (USA ~40 GB) -- and a unit straddling blocks gets partial counts
-        summed by the caller. Each unit is rasterized ALONE over its own bbox
+        anchor-window quarter (the density-cap footprint). Units are STREAMED
+        from the census file in small batches and rasterized as they arrive
+        (see CENSUS_READ_BATCH_ROWS: a whole-block read OOM'd the large
+        censuses); a unit straddling blocks gets partial counts summed by the
+        caller. Each unit is rasterized ALONE over its own bbox
         window with all_touched=True: the footprint must reproduce the tasks'
         any-intersection n_on convention (every pixel the unit touches), which
         the bound is applied against. A shared one-pass partition undercounts
@@ -218,16 +312,14 @@ def _census_rf_block_sums(
     ) = args
     pm_data = PopulationModelData(output_dir)
     model_spec = pm_data.load_model_specification(resolution, version)
-    rasters = {
-        tp: pm_data.load_raw_prediction(block_key, tp, model_spec)
-        for tp in window_tps
-    }
-    raster = rasters[census_time_point]
+    raster = pm_data.load_raw_prediction(block_key, census_time_point, model_spec)
+    transform, (n_rows, n_cols), crs = raster.transform, raster.shape, raster.crs
     array = np.nan_to_num(raster.to_numpy(), nan=0.0)
+    del raster
     codes = features.rasterize(
         [(geometry, i + 1) for i, (_, geometry) in enumerate(parent_geoms)],
-        out_shape=raster.shape,
-        transform=raster.transform,
+        out_shape=(n_rows, n_cols),
+        transform=transform,
         dtype="uint32",
     )
     sums = np.bincount(
@@ -238,40 +330,49 @@ def _census_rf_block_sums(
         for i, (task_parent_id, _) in enumerate(parent_geoms)
     }
 
-    units = pm_data.load_census_data(
-        iso3, year, bounds=block_box, admin_level=most_detailed_level,
-        columns=["shape_id", "geometry"],
-    )
-    if units.empty:
-        return parent_sums, None
-    units = units.to_crs(raster.crs)
-    on_arrays = {
-        tp: np.nan_to_num(rasters[tp].to_numpy(), nan=0.0) > 0 for tp in window_tps
-    }
-    n_rows, n_cols = raster.shape
-    inverse = ~raster.transform
-    counts = {tp: np.zeros(len(units), dtype=np.int64) for tp in window_tps}
-    for i, geometry in enumerate(units["geometry"]):
-        minx, miny, maxx, maxy = geometry.bounds
-        c0f, r0f = inverse * (minx, maxy)
-        c1f, r1f = inverse * (maxx, miny)
-        r0, c0 = max(0, int(np.floor(r0f))), max(0, int(np.floor(c0f)))
-        r1, c1 = min(n_rows, int(np.ceil(r1f))), min(n_cols, int(np.ceil(c1f)))
-        if r0 >= r1 or c0 >= c1:
-            continue
-        window_transform = raster.transform * Affine.translation(c0, r0)
-        mask = features.rasterize(
-            [(geometry, 1)],
-            out_shape=(r1 - r0, c1 - c0),
-            transform=window_transform,
-            all_touched=True,
-            dtype="uint8",
-        ).astype(bool)
-        for tp in window_tps:
-            counts[tp][i] = np.count_nonzero(mask & on_arrays[tp][r0:r1, c0:c1])
-    footprints: dict[str, Any] = {"shape_id": units["shape_id"].to_numpy()}
+    # ON masks per anchor-window quarter (the window always contains the
+    # census quarter, whose values are already loaded); one float raster in
+    # memory at a time.
+    on_arrays = {census_time_point: array > 0}
+    del array, codes
     for tp in window_tps:
-        footprints[f"n_on_{tp}"] = counts[tp]
+        if tp not in on_arrays:
+            on_arrays[tp] = np.nan_to_num(
+                pm_data.load_raw_prediction(block_key, tp, model_spec).to_numpy(),
+                nan=0.0,
+            ) > 0
+
+    inverse = ~transform
+    shape_ids: list[Any] = []
+    counts: dict[str, list[int]] = {tp: [] for tp in window_tps}
+    for batch_ids, batch_geometries in _iter_census_units_in_bounds(
+        pm_data.census_path(iso3, year), block_box.bounds, most_detailed_level, crs
+    ):
+        for shape_id, geometry in zip(batch_ids, batch_geometries, strict=True):
+            shape_ids.append(shape_id)
+            minx, miny, maxx, maxy = geometry.bounds
+            c0f, r0f = inverse * (minx, maxy)
+            c1f, r1f = inverse * (maxx, miny)
+            r0, c0 = max(0, int(np.floor(r0f))), max(0, int(np.floor(c0f)))
+            r1, c1 = min(n_rows, int(np.ceil(r1f))), min(n_cols, int(np.ceil(c1f)))
+            if r0 >= r1 or c0 >= c1:
+                for tp in window_tps:
+                    counts[tp].append(0)
+                continue
+            mask = features.rasterize(
+                [(geometry, 1)],
+                out_shape=(r1 - r0, c1 - c0),
+                transform=transform * Affine.translation(c0, r0),
+                all_touched=True,
+                dtype="uint8",
+            ).astype(bool)
+            for tp in window_tps:
+                counts[tp].append(int(np.count_nonzero(mask & on_arrays[tp][r0:r1, c0:c1])))
+    if not shape_ids:
+        return parent_sums, None
+    footprints: dict[str, Any] = {"shape_id": np.asarray(shape_ids, dtype=object)}
+    for tp in window_tps:
+        footprints[f"n_on_{tp}"] = np.asarray(counts[tp], dtype=np.int64)
     return parent_sums, pd.DataFrame(footprints)
 
 
@@ -422,11 +523,7 @@ def census_rf_main(
     # MEMORY DISCIPLINE: keep the parent process small while the worker pool
     # runs -- parent + num_cores workers share one cgroup budget. Read only
     # what block selection needs up front, free it, and load the heavy
-    # most-detailed hierarchy AFTER the workers return. (Historical note:
-    # this reorder was first made chasing the 2026-09-16 USA/CAN/MEX hang as
-    # a fork/COW blowup; the hang was actually the fork/pyarrow deadlock
-    # fixed by the spawn pool below. The small-parent discipline stays on its
-    # own merits.)
+    # most-detailed hierarchy AFTER the workers return.
     year = census_time_point.split("q")[0]
     census_levels = pd.read_parquet(
         pm_data.census_path(iso3, year), columns=["admin_level"]
@@ -496,14 +593,17 @@ def census_rf_main(
     gc.collect()
 
     print(f"Summing predictions over {len(block_args)} blocks at {census_time_point}")
-    # SPAWNED workers, not forked: these workers read the census parquet via
-    # pyarrow, whose internal thread pool does not survive a fork. Forked
-    # children (rra_tools.parallel -> pathos) deadlocked on the threaded
-    # multi-row-group reads of large censuses -- USA/CAN froze at 0 completed
-    # blocks for their entire runtime on 2026-09-16 while every small census
-    # (single-row-group, serial read path) sailed through. A spawned child is
-    # a fresh interpreter with its own pool. Plain progress prints (not a
-    # carriage-return bar) so the task log shows exactly where a stall sits.
+    # ProcessPoolExecutor, not rra_tools.parallel (pathos): when the OOM
+    # killer takes a worker, this raises BrokenProcessPool within seconds,
+    # whereas a pathos/multiprocessing Pool replaces the dead worker and waits
+    # forever for its lost result. That is what the 2026-09 USA/CAN/MEX
+    # "hangs" were (0 blocks done for the whole runtime; sacct shows the batch
+    # step OUT_OF_MEMORY) -- caused by whole-file census reads in every
+    # worker, now streamed (see CENSUS_READ_BATCH_ROWS). SPAWNED, not forked:
+    # the parent has already run pyarrow's thread pool, and forking a
+    # multi-threaded process is unsafe; a spawned worker costs ~0.7 GiB of its
+    # own imports (measured). Plain progress prints (not a carriage-return
+    # bar) so the task log shows exactly where a stall sits.
     ctx = multiprocessing.get_context("spawn")
     block_sums = []
     t_start = time.time()

@@ -4,6 +4,7 @@ from rra_population_model.postprocess.admin_rasters.runner import (
 )
 from rra_population_model.postprocess.mosaic.runner import (
     mosaic,
+    mosaic_change_task,
     mosaic_task,
 )
 from rra_population_model.postprocess.census_rake.runner import (
@@ -45,6 +46,7 @@ TASK_RUNNERS = {
     "census_rf": census_rf_task,
     "rake_itu": rake_itu_task,
     "mosaic": mosaic_task,
+    "mosaic_change": mosaic_change_task,
     "upsample": upsample_task,
     "admin_rasters": admin_rasters_task,
 }

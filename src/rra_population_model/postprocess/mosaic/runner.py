@@ -104,6 +104,35 @@ def mosaic_task(
 @click.command()
 @clio.with_resolution()
 @clio.with_version()
+@click.option("--group-key", type=str, required=True)
+@click.option("--start-time-point", type=str, required=True)
+@click.option("--end-time-point", type=str, required=True)
+@clio.with_output_directory(pmc.MODEL_ROOT)
+@clio.with_num_cores(8)
+def mosaic_change_task(
+    resolution: str,
+    version: str,
+    group_key: str,
+    start_time_point: str,
+    end_time_point: str,
+    output_dir: str,
+    num_cores: int,
+) -> None:
+    pm_data = PopulationModelData(output_dir)
+    model_spec = pm_data.load_model_specification(resolution, version)
+    utils.save_change_group_key(
+        group_key=group_key,
+        pm_data=pm_data,
+        time_points=[start_time_point, end_time_point],
+        model_spec=model_spec,
+        measure="population",
+        num_cores=num_cores,
+    )
+
+
+@click.command()
+@clio.with_resolution()
+@clio.with_version()
 @clio.with_time_point(choices=None, allow_all=True)
 @clio.with_output_directory(pmc.MODEL_ROOT)
 @clio.with_num_cores(8)
@@ -181,13 +210,37 @@ def mosaic(
 
     if "change" in MEASURES:
         print("Calculating and storing change")
-        utils.save_change(
-            resolution=resolution,
-            version=version,
-            time_points=[sorted(time_points)[0], sorted(time_points)[-1]],
-            output_dir=output_dir,
-            num_cores=1,
+        start_time_point, end_time_point = sorted(time_points)[0], sorted(time_points)[-1]
+        group_keys = pm_data.list_compiled_prediction_time_point_group_keys(
+            resolution, version, end_time_point, "population"
         )
+        status = jobmon.run_parallel(
+            runner="pmtask postprocess",
+            task_name="mosaic_change",
+            task_resources={
+                "queue": queue,
+                "cores": num_cores,
+                # Groups are up to 81920x81920 float32 (~27G) at both resolutions;
+                # peak is ~94G while subtracting.
+                "memory": "160G",
+                "runtime": "30m",
+                "project": "proj_rapidresponse",
+            },
+            node_args={"group-key": group_keys},
+            task_args={
+                "resolution": resolution,
+                "version": version,
+                "start-time-point": start_time_point,
+                "end-time-point": end_time_point,
+                "num-cores": num_cores,
+                "output-dir": output_dir,
+            },
+            max_attempts=2,
+            log_root=pm_data.log_dir("postprocess_mosaic_change"),
+        )
+        if status != "D":
+            msg = f"Change workflow failed with status {status}."
+            raise RuntimeError(msg)
 
     print("Building VRTs")
     model_spec = pm_data.load_model_specification(resolution, version)

@@ -90,7 +90,7 @@ def raking_data_main(
 @clio.with_choice(
     "out_version",
     allow_all=False,
-    choices=["gbd_2025", "gbd_2023", "gbd_2021", "fhs_2021"],
+    choices=["gbd_2025", "gbd_2023", "gbd_2021", "fhs_2021", "fhs_2023"],
 )
 def raking_data(
     output_dir: str,

@@ -103,6 +103,7 @@ def make_spatial_average(
     tile: rt.RasterArray,
     radius: int | float,
     kernel_type: Literal["uniform", "gaussian"] = "uniform",
+    apply_floor: bool = True,
 ) -> rt.RasterArray:
     """Compute a spatial average of a raster.
 
@@ -129,10 +130,11 @@ def make_spatial_average(
     kernel = make_smoothing_convolution_kernel(tile.x_resolution, radius, kernel_type)
 
     out_image = oaconvolve(arr, kernel, mode="same")
-    # TODO: Figure out why I did this
-    out_image -= np.nanmin(out_image)
-    min_value = 0.005
-    out_image[out_image < min_value] = 0.0
+    if apply_floor:
+        # TODO: Figure out why I did this
+        out_image -= np.nanmin(out_image)
+        min_value = 0.005
+        out_image[out_image < min_value] = 0.0
 
     out_image = out_image.reshape(arr.shape)
     out_raster = rt.RasterArray(

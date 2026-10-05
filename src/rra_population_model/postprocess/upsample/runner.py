@@ -14,17 +14,17 @@ from rra_population_model.data import PopulationModelData
 from rra_population_model.postprocess.utils import check_gdal_installed
 
 UPSAMPLE_SPECS = {
-    "world_cylindrical_250f": (pmc.CRSES["world_cylindrical"], 250, "average"),
-    "world_cylindrical_500f": (pmc.CRSES["world_cylindrical"], 500, "average"),
-    "world_cylindrical_1000f": (pmc.CRSES["world_cylindrical"], 1000, "average"),
-    "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
-    "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
-    "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
-    "world_cylindrical_10000f": (pmc.CRSES["world_cylindrical"], 10000, "average"),
-    "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
+    # "world_cylindrical_250f": (pmc.CRSES["world_cylindrical"], 250, "average"),
+    # "world_cylindrical_500f": (pmc.CRSES["world_cylindrical"], 500, "average"),
+    # "world_cylindrical_1000f": (pmc.CRSES["world_cylindrical"], 1000, "average"),
+    # "world_cylindrical_2000f": (pmc.CRSES["world_cylindrical"], 2000, "average"),
+    # "world_cylindrical_4000f": (pmc.CRSES["world_cylindrical"], 4000, "average"),
+    # "world_cylindrical_8000f": (pmc.CRSES["world_cylindrical"], 8000, "average"),
+    # "world_cylindrical_10000f": (pmc.CRSES["world_cylindrical"], 10000, "average"),
+    # "world_cylindrical_16000f": (pmc.CRSES["world_cylindrical"], 16000, "average"),
     "world_cylindrical_1000": (pmc.CRSES["world_cylindrical"], 1000, "sum"),
-    "world_cylindrical_5000": (pmc.CRSES["world_cylindrical"], 5000, "sum"),
-    "world_cylindrical_10000": (pmc.CRSES["world_cylindrical"], 10000, "sum"),
+    # "world_cylindrical_5000": (pmc.CRSES["world_cylindrical"], 5000, "sum"),
+    # "world_cylindrical_10000": (pmc.CRSES["world_cylindrical"], 10000, "sum"),
     "wgs84_0p1": (pmc.CRSES["wgs84"], 0.1, "sum"),
     "wgs84_0p01": (pmc.CRSES["wgs84"], 0.01, "sum"),
 }
@@ -85,7 +85,7 @@ def upsample_main(
     model_spec = pm_data.load_model_specification(resolution, version)
 
     gdalwarp_path = shutil.which("gdalwarp")
-    vrt_path = pm_data.compiled_prediction_vrt_path(time_point, model_spec)
+    vrt_path = pm_data.compiled_prediction_vrt_path(time_point, model_spec, "population")
 
     if "f" in spec_name:
         out_root = pm_data.figure_results / run_stamp
@@ -160,22 +160,32 @@ def upsample(
     pm_data = PopulationModelData(output_dir)
 
     compiled_time_points = pm_data.list_compiled_prediction_time_points(
-        resolution, version
+        resolution, version, "population"
     )
     time_points = clio.convert_choice(time_point, compiled_time_points)
 
-    print("Upsampling")
-
-    jobmon.run_parallel(
-        runner="pmtask postprocess",
-        task_name="upsample",
-        task_resources={
+    if resolution == "40":
+        task_resources = {
             "queue": queue,
             "cores": num_cores,
             "memory": "200G",
             "runtime": "480m",
             "project": "proj_rapidresponse",
-        },
+        }
+    elif resolution == "100":
+        task_resources = {
+            "queue": queue,
+            "cores": num_cores,
+            "memory": "160G",
+            "runtime": "360m",
+            "project": "proj_rapidresponse",
+        }
+
+    print("Upsampling")
+    jobmon.run_parallel(
+        runner="pmtask postprocess",
+        task_name="upsample",
+        task_resources=task_resources,
         node_args={
             "time-point": time_points,
             "spec-name": spec_name,

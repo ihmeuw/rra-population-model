@@ -22,6 +22,18 @@ type Polygon = shapely.Polygon | shapely.MultiPolygon
 type BBox = tuple[float, float, float, float]
 type Bounds = BBox | Polygon
 
+# Census parquets are written in bounded row groups so readers can skip data
+# using row-group statistics. Rows are stored level-sorted (parents first), so
+# small groups keep parent levels in groups of their own -- skippable on
+# admin_level statistics -- and keep each group spatially compact for bbox
+# pruning. With pyarrow's default (1M-row groups; most files a single group)
+# every bbox read decoded nearly the whole file: CAN's parent outlines alone
+# are ~1.5 GB of geometry (the national outline is one 266 MB value), which
+# pushed each census_rf worker to ~4.5 GiB and the task past 24G. With
+# 10k-row groups CAN's per-worker census scan fell from +3.2 to +0.1 GiB and
+# the whole task to 17.3 GiB, with identical outputs (2026-10-03).
+CENSUS_ROW_GROUP_ROWS = 10_000
+
 
 class TileIndexInfo(BaseModel):
     tile_size: int
@@ -321,7 +333,9 @@ class PopulationModelData:
     def save_census_data(self, gdf: gpd.GeoDataFrame, iso3: str, year: str) -> None:
         path = self.census_path(iso3, year)
         touch(path, clobber=True)
-        gdf.to_parquet(path, write_covering_bbox=True)
+        gdf.to_parquet(
+            path, write_covering_bbox=True, row_group_size=CENSUS_ROW_GROUP_ROWS
+        )
 
     def load_census_data(
         self,

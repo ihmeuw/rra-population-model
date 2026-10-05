@@ -221,8 +221,10 @@ def _iter_census_units_in_bounds(
     Row selection reproduces geopandas' covering-bbox filter exactly (keep
     unless xmin > maxx, ymin > maxy, xmax < minx or ymax < miny), in file
     order, so results match ``load_census_data(bounds=...)``; geometries are
-    returned in ``target_crs``. Row groups whose bbox statistics cannot
-    intersect are skipped without reading.
+    returned in ``target_crs``. Row groups that hold no ``admin_level`` rows,
+    or whose bbox statistics cannot intersect, are skipped without reading --
+    effective once census files are written in bounded row groups
+    (data.CENSUS_ROW_GROUP_ROWS); on older single-group files it is a no-op.
     """
     minx, miny, maxx, maxy = bounds
     pf = pq.ParquetFile(path, buffer_size=CENSUS_READ_BUFFER_BYTES)
@@ -237,8 +239,16 @@ def _iter_census_units_in_bounds(
     metadata = pf.metadata
     paths = [metadata.schema.column(i).path for i in range(metadata.num_columns)]
     stat_index = {k: paths.index(f"bbox.{k}") for k in ("xmin", "ymin", "xmax", "ymax")}
+    level_index = paths.index("admin_level")
     row_groups = []
     for g in range(metadata.num_row_groups):
+        level = metadata.row_group(g).column(level_index).statistics
+        if level is not None and level.has_min_max and not (
+            level.min <= admin_level <= level.max
+        ):
+            # Parent-level row groups: their geometries can be enormous (CAN's
+            # national outline alone is 266 MB) and are never needed here.
+            continue
         stats = {k: metadata.row_group(g).column(i).statistics for k, i in stat_index.items()}
         if all(st is not None and st.has_min_max for st in stats.values()) and (
             stats["xmin"].min > maxx

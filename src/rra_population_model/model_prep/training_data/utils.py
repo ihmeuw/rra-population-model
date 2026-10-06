@@ -6,6 +6,9 @@ import numpy.typing as npt
 import pandas as pd
 import rasterra as rt
 import tqdm
+from rasterio import features
+from scipy import ndimage
+from shapely import area, box, intersection
 
 from rra_population_model import constants as pmc
 from rra_population_model.data import PopulationModelData
@@ -101,6 +104,80 @@ def build_arg_list(
     return to_run
 
 
+def build_neighbourhood_sizes(
+    resolution: str,
+    pm_data: PopulationModelData,
+    to_run: list[tuple[str, str, str]],
+) -> dict[str, int]:
+    """How many tiles each task will load, keyed by tile key.
+
+    Called by `build_task_resource_table`, not by the runner: the result is
+    checked in as `task_resources.parquet` so submission is a file read rather
+    than a ~6 minute computation.
+
+    A task's cost is set by its *tile neighbourhood* - every tile touching any
+    admin that touches its own tile, all of which `get_training_metadata` loads
+    - not by anything about the tile itself. Neighbourhoods run from 1 to 197
+    tiles, which is the whole 20 GB to 240 GB spread in what a task needs.
+
+    It is the same quantity the task derives, not an approximation: validated
+    against 1,910 tiles from the 2026-09-02 run at 100.00% exact agreement.
+
+    The work is one spatial join per country, not one per task. A join of admins
+    against the modeling frame gives both directions at once - the tiles each
+    admin touches, and the admins each tile touches - after which a tile's
+    neighbourhood is the union of the tile sets of its own admins. Set
+    arithmetic, so 34,230 tasks cost no more than the join itself: measured at
+    55s for MEX and 225s for USA.
+
+    Note this loads a country's full max-level census (USA is 8.1M shapes) on
+    the submitting host, which is the memory high-water mark of the runner.
+    """
+    modeling_frame = pm_data.load_modeling_frame(resolution)
+    tiles = (
+        modeling_frame.drop_duplicates("tile_key")
+        .loc[:, ["tile_key", "geometry"]]
+        .reset_index(drop=True)
+    )
+
+    # A tile on a national border carries several entries and draws admins from
+    # all of them, so the census keys are collected across the whole list. 462 of
+    # the 34,230 tiles are USA/MEX border tiles; sizing them from the first entry
+    # alone under-predicts, which is the wrong direction to be wrong in.
+    census_keys = {
+        (iso3, time_point.split("q")[0])
+        for _, _, iso3_time_points in to_run
+        for iso3, time_point in (
+            entry.split(":") for entry in iso3_time_points.split(",")
+        )
+    }
+
+    contributions: dict[tuple[str, str], dict[str, frozenset[str]]] = {}
+    for iso3, year in sorted(census_keys):
+        admins = pm_data.load_census_data(iso3, year)
+        admins = admins.loc[
+            admins["admin_level"] == admins["admin_level"].max(), ["geometry"]
+        ].reset_index(drop=True)
+        joined = gpd.sjoin(admins, tiles, predicate="intersects", how="inner")
+        admin_tiles = joined.groupby(level=0)["tile_key"].apply(frozenset)
+        tile_admins = joined.reset_index().groupby("tile_key")["index"].apply(list)
+        contributions[(iso3, year)] = {
+            tile_key: frozenset().union(*(admin_tiles[i] for i in admin_ids))
+            for tile_key, admin_ids in tile_admins.items()
+        }
+
+    sizes = {}
+    for tile_key, _, iso3_time_points in to_run:
+        neighbourhood: set[str] = set()
+        for entry in iso3_time_points.split(","):
+            iso3, time_point = entry.split(":")
+            neighbourhood |= contributions[(iso3, time_point.split("q")[0])].get(
+                tile_key, frozenset()
+            )
+        sizes[tile_key] = len(neighbourhood)
+    return sizes
+
+
 def build_summary_people_per_structure(
     pm_data: PopulationModelData,
     resolution: str,
@@ -135,14 +212,247 @@ def safe_divide(
     return r
 
 
+def _get_valid_data_mask(
+    array: npt.NDArray[np.floating[Any]], no_data_value: Any
+) -> npt.NDArray[np.bool_]:
+    """Pixels carrying real data, given a raster's nodata convention."""
+    if no_data_value is None:
+        valid = np.ones(array.shape, dtype=bool)
+    elif isinstance(no_data_value, float) and np.isnan(no_data_value):
+        valid = ~np.isnan(array)
+    else:
+        valid = array != no_data_value
+    return np.asarray(valid, dtype=bool)
+
+
+def build_overlay_skeleton(
+    shapes: gpd.GeoDataFrame,
+    template_raster: rt.RasterArray,
+    *,
+    drop_no_data: bool = True,
+    dilate_border: bool = True,
+) -> pd.DataFrame:
+    """Map polygons onto raster pixels by rasterization, not polygon overlay.
+
+    Returns one row per (shape, pixel) intersection with ``pixel_id``,
+    ``shape_id`` and ``isection_area``. ``shape_id`` is the 0-based row position
+    into ``shapes``, not any string identifier the caller may hold - integer
+    codes keep the downstream groupby off string hashing.
+
+    ``pixel_id`` is the C-order flat index into the template raster's array,
+    which is the same index ``RasterArray.to_gdf().reset_index()`` produces, so
+    per-pixel columns can be attached by position without a spatial join.
+
+    Why this rather than ``GeoDataFrame.overlay``: overlay's cost scales with
+    the *area* of the two frames, because every pixel has to become a polygon
+    first. Here only pixels a shape boundary passes through need geometry at
+    all - interior pixels lie wholly within one shape, so a rasterized centre
+    hit gives exact full coverage for free. Cost scales with perimeter instead.
+
+    Adapted from ``postprocess.census_rake.utils.build_overlay_skeleton``. The
+    two are kept separate until this path is validated against the overlay it
+    replaces; consolidating them is a follow-up.
+
+    Parameters
+    ----------
+    shapes
+        Polygons to intersect, in the raster's CRS.
+    template_raster
+        Supplies the grid: shape, transform, resolution and nodata.
+    drop_no_data
+        Drop pixels the raster marks as nodata. Census raking does this so that
+        in-shape water yields NaN rather than a spurious zero. ``overlay`` on a
+        ``to_gdf`` frame keeps them, so this defaults on but is switchable while
+        the two paths are being compared.
+    dilate_border
+        Widen the border mask by one cell before splitting interior from border.
+
+        ``all_touched`` is a Bresenham-style traversal, not an exact "does this
+        line clip this cell" test, so a boundary running nearly tangent to a
+        pixel edge can leave a cell it genuinely crosses unmarked. That cell then
+        takes the interior shortcut and is awarded the *whole* pixel, while the
+        shape on the far side loses its sliver entirely - area is misattributed
+        between admins rather than lost, so tile totals barely move.
+
+        On by default. Measured on a stratified sample of the training
+        population (40 tiles across four admin-count strata, plus 38 more in
+        the low-admin strata):
+
+        =================  ==============  ==============  ==============
+        admins per tile    geometry off    occupancy off   worst sliver
+        =================  ==============  ==============  ==============
+        1-10               2/21            0/21            6.66 m2
+        11-100             3/37            0/37            3.94 m2
+        101-1,000          4/10            1/10            5.74 m2
+        >1,000             6/10            6/10            9.40 m2
+        =================  ==============  ==============  ==============
+
+        Weighted to the population, roughly 25% of tiles deviate geometrically
+        without it and 9% move their occupancy rate; with it, 0 of the 78
+        sampled tiles deviate at all. Worst deviation in the rates the model
+        trains on was 4.8e-03 (pixel) and 5.8e-04 (admin). The error is
+        systematic - always toward the admin holding the pixel centre - so it
+        does not average out.
+
+        Cost, anchored on jobmon workflow 523886 (the overlay-method run that
+        produced ``training-data-OLD-v8``: 34,230 tasks, 3h07m, median task
+        60s). Median task time here is 27.1s without the dilation and 29.5s
+        with it, so the whole run lands near 1h25m and 1h33m respectively -
+        still about twice as fast as the overlay it replaces. Total compute
+        goes from 386 to 492 task-hours.
+
+        Set it False to trade that back: the cost falls disproportionately on
+        tiles with few admins, which have large tile neighbourhoods and never
+        moved occupancy in 58 samples. A threshold - dilating only above ~100
+        admins - captured all of the observed benefit for about 15% of the
+        cost, if runtime ever becomes binding.
+
+        Peak memory is unchanged: 1.00x on four stress tiles, chosen for the
+        conditions that would show it worst - neighbourhoods up to 88 tiles and
+        up to 39,053 admins. The border-pixel working set does grow about 1.7x,
+        but it is not what sets the peak, so no task crosses a
+        ``resource_scales`` boundary. Worth re-checking if the peak's driver
+        changes: the overlay run reached 163 GiB against a 10 GiB median, so
+        the headroom above the median is where a regression would surface.
+    """
+    out_shape = template_raster.shape
+    transform = template_raster.transform
+    pixel_area = np.float32(
+        abs(template_raster.x_resolution * template_raster.y_resolution)
+    )
+
+    if drop_no_data:
+        valid = _get_valid_data_mask(
+            template_raster.to_numpy().astype(np.float32),
+            template_raster.no_data_value,
+        )
+    else:
+        valid = np.ones(out_shape, dtype=bool)
+
+    shapes = shapes.reset_index(drop=True)
+    n_shapes = len(shapes)
+    id_dtype = "uint16" if n_shapes < np.iinfo(np.uint16).max else "uint32"
+
+    # Burn shape ids (1-based; 0 == no shape) by pixel centre, then drop nodata.
+    assigned = features.rasterize(
+        ((geom, i + 1) for i, geom in enumerate(shapes.geometry.to_numpy())),
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        all_touched=False,
+        dtype=id_dtype,
+    )
+    assigned[~valid] = 0
+
+    # Any pixel a shape boundary touches needs an exact intersection.
+    border_mask = features.rasterize(
+        ((geom, 1) for geom in shapes.geometry.boundary.to_numpy()),
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        all_touched=True,
+        dtype="uint8",
+    ).astype(bool)
+    if dilate_border:
+        # A grazed cell neighbours one the line does cross, so widening the mask
+        # by a cell recovers it. That is the rationale rather than a proof; what
+        # is checked is the outcome, against an exhaustive float64 overlay,
+        # which this then matches to float32 storage precision. 8-connectivity
+        # because a proof that 4 suffices is not available and it costs ~7% more.
+        # See the docstring for what this is worth and what it costs.
+        border_mask = ndimage.binary_dilation(
+            border_mask, structure=np.ones((3, 3), dtype=bool)
+        )
+    border_mask &= valid
+
+    # Interior: wholly inside one shape, so full coverage and no geometry work.
+    interior_idx = np.flatnonzero((assigned > 0) & ~border_mask)
+    interior = pd.DataFrame(
+        {
+            "pixel_id": interior_idx,
+            "shape_id": (assigned.ravel()[interior_idx] - 1).astype(id_dtype),
+            "isection_area": pixel_area,
+        }
+    )
+
+    # Border: build cell polygons here only, and intersect them with the shapes.
+    border_idx = np.flatnonzero(border_mask)
+    if border_idx.size:
+        rows, cols = np.unravel_index(border_idx, out_shape)
+        a, b, c, d, e, f = (
+            transform.a,
+            transform.b,
+            transform.c,
+            transform.d,
+            transform.e,
+            transform.f,
+        )
+        x0 = a * cols + b * rows + c
+        y0 = d * cols + e * rows + f
+        x1 = a * (cols + 1) + b * (rows + 1) + c
+        y1 = d * (cols + 1) + e * (rows + 1) + f
+        boxes = box(
+            np.minimum(x0, x1),
+            np.minimum(y0, y1),
+            np.maximum(x0, x1),
+            np.maximum(y0, y1),
+        )
+        border_pixels = gpd.GeoDataFrame(
+            {"pixel_id": border_idx}, geometry=boxes, crs=template_raster.crs
+        )
+        # Pair border pixels with the shapes they hit, then intersect vectorized
+        # and take the area. This sidesteps overlay's noding/polygonize
+        # machinery, which is far slower on convoluted boundaries; zero-area
+        # (line or point) touches fall out through the area > 0 filter.
+        joined = gpd.sjoin(
+            border_pixels,
+            shapes[["geometry"]],
+            predicate="intersects",
+            how="inner",
+        )
+        shape_geom = shapes.geometry.to_numpy()[joined["index_right"].to_numpy()]
+        isection_area = area(intersection(joined.geometry.to_numpy(), shape_geom))
+        border = pd.DataFrame(
+            {
+                "pixel_id": joined["pixel_id"].to_numpy(),
+                "shape_id": joined["index_right"].to_numpy().astype(id_dtype),
+                "isection_area": isection_area.astype(np.float32),
+            }
+        )
+        border = border[border["isection_area"] > 0]
+    else:
+        border = pd.DataFrame(
+            {
+                "pixel_id": np.array([], dtype=np.int64),
+                "shape_id": np.array([], dtype=id_dtype),
+                "isection_area": np.array([], dtype=np.float32),
+            }
+        )
+
+    overlay = pd.concat([interior, border], ignore_index=True)
+    overlay["pixel_area"] = pixel_area
+    return overlay
+
+
 def get_tile_feature_gdf(
     tile_meta: TileMetadata,
     training_meta: TrainingMetadata,
     pm_data: PopulationModelData,
     time_point: str,
-) -> gpd.GeoDataFrame:
-    """Load the raster features for the tile and convert to a GeoDataFrame."""
+) -> pd.DataFrame:
+    """Intersect the tile's admins with its pixels, and attach the features.
 
+    Returns one row per (admin, pixel) intersection. No geometry: the pixel
+    polygons this used to build were never read downstream - `process_model_gdf`
+    works purely off `isection_area` / `pixel_area` / `admin_area`, and
+    `filter_to_admin_gdf` re-attaches admin geometry by `admin_id`.
+
+    The intersection is done by rasterizing the admins onto the pixel grid
+    rather than by `GeoDataFrame.overlay`. Overlay costs scale with the *area*
+    of both frames, since every pixel first has to become a polygon; rasterizing
+    means only pixels an admin boundary passes through need geometry at all. See
+    `build_overlay_skeleton`.
+    """
     tile_features = {}
     for feature_name in training_meta.features:
         tile_features[feature_name] = pm_data.load_feature(
@@ -155,36 +465,38 @@ def get_tile_feature_gdf(
 
     default_raster = training_meta.denominators[0]
     bd_raster = tile_features.pop(default_raster)
-    feature_gdf = (
-        bd_raster.to_gdf()
-        .reset_index()
-        .rename(columns={"value": f"pixel_{default_raster}", "index": "pixel_id"})
-        .sort_values("pixel_id")
-    )
-    feature_gdf["pixel_area"] = feature_gdf.area
-    feature_gdf["block_key"] = tile_meta.block_key
-    feature_gdf["tile_key"] = tile_meta.key
-    feature_gdf["time_point"] = time_point
 
+    # Per-pixel features, keyed by the flat C-order index into the tile raster -
+    # the same index `build_overlay_skeleton` emits, so these attach by position
+    # rather than by a spatial join.
+    pixel_df = pd.DataFrame(
+        {
+            "pixel_id": np.arange(bd_raster.size),
+            f"pixel_{default_raster}": bd_raster.to_numpy().flatten(),
+        }
+    )
     for feature_name, feature_raster in tile_features.items():
-        feature_gdf[f"pixel_{feature_name}"] = feature_raster.to_numpy().flatten()
+        pixel_df[f"pixel_{feature_name}"] = feature_raster.to_numpy().flatten()
 
+    # `intersecting_admins` is already restricted to admins meeting this tile,
+    # and the raster covers exactly the tile, so pixels outside it do not exist.
+    # The clip to a buffered tile the overlay path needed is therefore dropped.
+    admins = training_meta.intersecting_admins.reset_index(drop=True)
+
+    # `drop_no_data=False` keeps nodata pixels, matching what `to_gdf` did.
+    # Dropping them would leave `raster_from_pixel_feature` to fill the gaps with
+    # 0.0, which differs from today for the mean-aggregated features.
+    skeleton = build_overlay_skeleton(admins, bd_raster, drop_no_data=False)
+
+    admin_cols = admins.drop(columns="geometry")
     tile_gdf = (
-        training_meta.intersecting_admins
-        # First we just want to subset the admins as the computational complexity
-        # of overlay is proportional to the area of the two gdfs (or to the points
-        # it has to figure out).
-        .overlay(
-            tile_meta.gs.buffer(10).to_frame(),
-            how="intersection",
-            keep_geom_type=True,
-        ).overlay(
-            feature_gdf,
-            how="intersection",
-            keep_geom_type=True,
-        )
+        skeleton.join(admin_cols, on="shape_id")
+        .merge(pixel_df, on="pixel_id", how="left")
+        .drop(columns="shape_id")
     )
-    tile_gdf["isection_area"] = tile_gdf.area
+    tile_gdf["block_key"] = tile_meta.block_key
+    tile_gdf["tile_key"] = tile_meta.key
+    tile_gdf["time_point"] = time_point
     return tile_gdf
 
 
@@ -312,6 +624,18 @@ def process_model_gdf(
         for measure in keep_measures:
             model_gdf[f"{measure}_{denominator}"] = denominator_df[measure]
 
+    # Assigned one column at a time, which raises a pandas PerformanceWarning
+    # about fragmentation. Left that way deliberately: the warning's suggested
+    # remedy costs more memory than it saves, and memory is what kills these
+    # tasks. Measured on a 200k-row, 250-column frame:
+    #
+    #   per-column insert (this)          0.55s   peak +0.40 GB
+    #   pd.concat                         1.36s   peak +0.80 GB
+    #   pd.concat(copy=False)             0.67s   peak +1.20 GB
+    #   model_gdf[cols] = frame           0.75s   peak +0.77 GB
+    #
+    # Every alternative materialises a second copy of the frame. Fragmentation
+    # is real but its cost here is a slower write, not a bigger peak.
     for feature in training_meta.features:
         model_gdf[f"admin_{feature}"] = (
             model_gdf[f"pixel_{feature}"] * model_gdf["admin_area_weight"]
@@ -328,18 +652,21 @@ def filter_to_admin_gdf(
     training_meta: TrainingMetadata,
 ) -> gpd.GeoDataFrame:
     """Filter the model GDF to only the admin-level features and rows."""
-    keep_cols = (
-        ["block_key", "tile_key", "time_point"]
-        + [c for c in model_gdf if c[:5] == "admin"]
-        + ["geometry"]
-    )
-    model_gdf = model_gdf.loc[:, keep_cols].groupby("admin_id").first().reset_index()
-    model_gdf["geometry"] = (
+    keep_cols = ["block_key", "tile_key", "time_point"] + [
+        c for c in model_gdf if c[:5] == "admin"
+    ]
+    admin_df = model_gdf.loc[:, keep_cols].groupby("admin_id").first().reset_index()
+    # Geometry comes from the admin shapes, not from the intersection rows - it
+    # always did; the old code carried a geometry column through only to
+    # overwrite it here.
+    geometry = (
         training_meta.intersecting_admins.set_index("admin_id")
-        .loc[model_gdf["admin_id"], "geometry"]
+        .loc[admin_df["admin_id"], "geometry"]
         .to_numpy()
     )
-    return model_gdf
+    return gpd.GeoDataFrame(
+        admin_df, geometry=geometry, crs=training_meta.intersecting_admins.crs
+    )
 
 
 def raster_from_pixel_feature(
@@ -392,3 +719,61 @@ def raster_from_pixel_feature(
         no_data_value=np.nan,
     )
     return feature_raster
+
+
+def build_task_resource_table(
+    resolution: str,
+    pm_data: PopulationModelData,
+    bands: list[tuple[int, int, int]],
+    observed: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Resolve the resource bands to one row per tile.
+
+    Writing this out is what lets the runner size tasks without computing
+    neighbourhoods at submission - a ~6 minute job that loads the full USA
+    max-level census on the submitting host. Regenerate when the modeling frame,
+    the census vintages, or the denominator list change; the runner warns when a
+    tile it is about to submit is missing from the table.
+
+    Parameters
+    ----------
+    bands
+        ``(max neighbourhood size, memory GB, runtime minutes)``, ascending.
+    observed
+        Optional measurements from a previous run, indexed by tile key with
+        columns ``obs_mem_gb`` (the smallest request the tile was seen to
+        survive) and ``obs_runtime_min`` (its longest successful elapsed).
+
+        This is the point of the table rather than a bare formula: a band is a
+        prediction, an observation is what actually happened, and where they
+        disagree the observation wins. The smallest *surviving request* is the
+        target rather than peak RSS - RSS measures what a task was given, not
+        what it needed, so fitting reservations to it converges downward until
+        tasks start dying.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``tile_key``, ``neighbourhood``, ``memory_gb``, ``runtime_min``.
+    """
+    to_run = build_arg_list(resolution, pm_data)
+    sizes = build_neighbourhood_sizes(resolution, pm_data, to_run)
+    table = pd.DataFrame(
+        {"tile_key": list(sizes), "neighbourhood": list(sizes.values())}
+    )
+    table["memory_gb"] = [
+        next(m for limit, m, _ in bands if n <= limit) for n in table["neighbourhood"]
+    ]
+    table["runtime_min"] = [
+        next(r for limit, _, r in bands if n <= limit) for n in table["neighbourhood"]
+    ]
+
+    if observed is not None:
+        obs = table["tile_key"].map(observed["obs_mem_gb"]).fillna(0)
+        table["memory_gb"] = np.maximum(table["memory_gb"], obs).astype(int)
+        # Double what was actually needed: elapsed time varies with cluster load
+        # in a way the band cannot see, so a tile that once ran long gets slack.
+        ran = np.ceil(table["tile_key"].map(observed["obs_runtime_min"]).fillna(0) * 2)
+        table["runtime_min"] = np.maximum(table["runtime_min"], ran).astype(int)
+
+    return table.sort_values("tile_key").reset_index(drop=True)

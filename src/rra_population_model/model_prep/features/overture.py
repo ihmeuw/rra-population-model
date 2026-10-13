@@ -18,6 +18,10 @@ from rra_population_model.model_prep.features.metadata import FeatureMetadata
 
 # ADD OVERTURE YEAR
 TIME_POINT_OVERTURE = "2020q2"
+# Number of blocks of buffer around each block. The vector query, the
+# rasterization window, and the maximum reliable distance are all derived from
+# this single value so they stay consistent.
+BLOCK_BUFFER = 1
 
 
 def read_and_clip_vector(
@@ -81,10 +85,13 @@ def get_metadata_from_block_template(
 
 # Generate expanded shape and new transform
 def expand_shape_and_transform(
-    original_shape: tuple[int, int], original_transform: Affine
+    original_shape: tuple[int, int],
+    original_transform: Affine,
+    buffer: int,
 ) -> tuple[tuple[int, int], Affine]:
-    # New shape
-    new_shape = (original_shape[0] * 3, original_shape[1] * 3)
+    # Surround the block with `buffer` blocks on every side.
+    factor = 1 + 2 * buffer
+    new_shape = (original_shape[0] * factor, original_shape[1] * factor)
 
     # New transform
     # Calculate the adjustment considering the resolution
@@ -92,8 +99,8 @@ def expand_shape_and_transform(
     width = original_shape[1]
 
     resolution = original_transform.a
-    adjustment_x = resolution * width  # Width adjustment (to the left)
-    adjustment_y = resolution * height  # Height adjustment (up)
+    adjustment_x = resolution * width * buffer  # Width adjustment (to the left)
+    adjustment_y = resolution * height * buffer  # Height adjustment (up)
 
     # Update the transform by adding adjustments
     new_transform = Affine(
@@ -148,6 +155,7 @@ def compute_feature_array(
     mode: str,
     original_shape: tuple[int, int],
     transform: Affine,
+    buffer: int,
     bandwidth_m: float = 300.0,
 ) -> np.ndarray[tuple[Any, ...], Any]:
     """
@@ -158,8 +166,16 @@ def compute_feature_array(
 
     if mode == "distance":
         # distance expects features=0, background=1
-        mask = rasterized
-        result_array = distance_transform_edt(mask) * pixel_size
+        # Distances are only reliable out to the buffer width; beyond that a
+        # nearer feature could exist just outside the frame, so cap there.
+        max_distance = buffer * min(original_shape) * pixel_size
+        if (rasterized == 0).any():
+            result_array = distance_transform_edt(rasterized) * pixel_size
+            result_array = np.minimum(result_array, max_distance)
+        else:
+            # No features in the window: every pixel is at least `max_distance`
+            # away, which is exactly the cap we would apply anyway.
+            result_array = np.full(rasterized.shape, max_distance, dtype=float)
 
     elif mode == "kde_density":
         # KDE expects features=1, background=0
@@ -167,11 +183,11 @@ def compute_feature_array(
         sigma = bandwidth_m / pixel_size
         result_array = gaussian_filter(mask, sigma=sigma)
 
-    # Subset to original shape
-    start_row = original_shape[0]
-    end_row = original_shape[0] * 2
-    start_col = original_shape[1]
-    end_col = original_shape[1] * 2
+    # Subset to original shape (the center block within the buffered window)
+    start_row = original_shape[0] * buffer
+    end_row = original_shape[0] * (buffer + 1)
+    start_col = original_shape[1] * buffer
+    end_col = original_shape[1] * (buffer + 1)
     result_array = result_array[start_row:end_row, start_col:end_col]
 
     clipped_result_array = clip_to_block_template(result_array, feature_metadata)
@@ -217,7 +233,10 @@ def generate_overture_features(
     block_key = feature_metadata.block_key
 
     # Step 2: Expanded bounding box
-    expanded_bbox = expand_tile_bounding_box(model_frame, block_key)
+    expanded_bbox = expand_tile_bounding_box(
+        model_frame, block_key,
+        expansion_factor=BLOCK_BUFFER,
+    )
 
     # Read vector file
     vector_gdf_subset = read_and_clip_vector(
@@ -231,10 +250,16 @@ def generate_overture_features(
     shape, transform = get_metadata_from_block_template(feature_metadata.block_template)
 
     # Expand shape and transform for edge effects
-    new_shape, new_transform = expand_shape_and_transform(shape, transform)
+    new_shape, new_transform = expand_shape_and_transform(
+        shape, transform, buffer=BLOCK_BUFFER
+    )
 
-    # Rasterization
-    rasterized = rasterize(vector_gdf_subset, new_shape, new_transform)
+    # Rasterization. When no features fall in the buffered window the query
+    # returns None; represent that as an all-background raster (features=0).
+    if vector_gdf_subset is None:
+        rasterized = np.ones(new_shape, dtype=int)
+    else:
+        rasterized = rasterize(vector_gdf_subset, new_shape, new_transform)
 
     # Generate feature array
     feature_array = compute_feature_array(
@@ -243,12 +268,13 @@ def generate_overture_features(
         mode,
         original_shape=shape,
         transform=new_transform,
+        buffer=BLOCK_BUFFER,
     )
 
     # Convert feature array → RasterArray first (same shape/transform as template)
     feature_raster = rt.RasterArray(
         feature_array.astype(np.float32),
-        transform=new_transform,
+        transform=transform,
         crs=feature_metadata.block_template.crs,
         no_data_value=np.nan,
     )
@@ -261,7 +287,8 @@ def generate_overture_features(
 
     # Convert back to RasterArray with same metadata
     filled_feature_raster = rt.RasterArray(
-        np.nan_to_num(filled_feature_data),
+        # np.nan_to_num(filled_feature_data),
+        filled_feature_data,
         transform=feature_raster.transform,
         crs=feature_raster.crs,
         no_data_value=feature_raster.no_data_value,
@@ -300,7 +327,13 @@ def generate_overture_features(
             block_key=feature_metadata.block_key,
             resolution=feature_metadata.resolution,
         )
-
+        pm_data.link_feature(
+            source_path=feature_path,
+            feature_name=f"log_{feature_name}",
+            time_point=time_point,
+            block_key=feature_metadata.block_key,
+            resolution=feature_metadata.resolution,
+        )
 
 def process_overture(
     feature_metadata: FeatureMetadata,
@@ -313,7 +346,9 @@ def process_overture(
     overture_dict = pm_data.list_overture_covariates()
 
     for overture_class, overture_types in overture_dict.items():
+        print(overture_class)
         for overture_type in overture_types:
+            print(f'    {overture_type}')
             # Always generate distance
             generate_overture_features(
                 pm_data,

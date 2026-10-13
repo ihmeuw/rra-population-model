@@ -12,6 +12,9 @@ from rra_population_model.data import (
     PopulationModelData,
 )
 
+REFERENCE_BUILDING_VERSION = "microsoft_v8"
+REFERENCE_TIME_POINT = "2020q2"
+
 
 class FeatureMetadata(NamedTuple):
     model_frame: gpd.GeoDataFrame
@@ -44,10 +47,10 @@ def get_feature_metadata(
     working_crs = get_working_crs(block_frame)
     block_bounds = get_block_bounds(block_frame, model_frame, working_crs)
     block_template = bd_data.load_tile(  # Any provider or measure would do here
-        provider="microsoft_v4",
+        provider=REFERENCE_BUILDING_VERSION,
         measure="density",
         resolution=resolution,
-        time_point="2023q4",
+        time_point=REFERENCE_TIME_POINT,
         block_key=block_key,
     )
     return FeatureMetadata(

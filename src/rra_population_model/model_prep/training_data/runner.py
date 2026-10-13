@@ -283,8 +283,8 @@ def training_data(
         task_resources={
             "queue": queue,
             "cores": 1,
-            "memory": BAND_RESOURCES[0][1],
-            "runtime": BAND_RESOURCES[0][2],
+            "memory": f"{BAND_RESOURCES[0][1]}G",
+            "runtime": f"{BAND_RESOURCES[0][2]}m",
             "project": "proj_rapidresponse",
         },
         # args = (tile-key, time-point, iso3-time-point-list). A tile appears once

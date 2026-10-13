@@ -215,7 +215,10 @@ def metrics(
             "queue": queue,
             "cores": 1,
             "memory": "20G",
-            "runtime": "10m",
+            # Sized from the 2026_10_01.001-.003 runs (2026-10-02): median 45 s,
+            # p99 6.6 min, slowest retry 11.6 min. At 10m, 38 of ~35,000 tasks
+            # timed out on the first attempt and needed jobmon's retries.
+            "runtime": "20m",
             "project": "proj_rapidresponse",
         },
         node_args={

@@ -277,25 +277,6 @@ class ObmStrategy(ProcessStrategy):
             )
         return out_paths
 
-    def generate_geospatial_averages(
-        self,
-        features: list[str],
-        feature_average_radii: list[int],
-        pm_data: PopulationModelData,
-    ) -> dict[str, Path]:
-        """Honour the version's opt-out.
-
-        `geospatial_average_features` averages a fixed six measures across every
-        registered version. OBM produces two of them, so running it would fail
-        on the first missing raster rather than skip.
-        """
-        if not self.built_version.geospatial_averages:
-            print(f"Geospatial averages disabled for {self.built_version.name}.")
-            return {}
-        return super().generate_geospatial_averages(
-            features, feature_average_radii, pm_data
-        )
-
 
 class InterpolateStrategy(ProcessStrategy):
     def generate_measures(
@@ -376,26 +357,6 @@ HEIGHT_MIN = 2.4384  # 8ft
 # every measure it has, and OBM writes its own through ObmStrategy - see
 # NO_DERIVED_MEASURES.
 FEATURE_SPECS: dict[str, dict[str, Any]] = {
-    "microsoft_v6": {
-        "density": "microsoft_v6_density",
-        "height": "ghsl_r2023a_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v7": {
-        "density": "microsoft_v7_density",
-        "height": "microsoft_v7_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v7_1": {
-        "density": "microsoft_v7_1_density",
-        "height": "microsoft_v7_1_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
-    "microsoft_v7_e101": {
-        "density": "microsoft_v7_e101_density",
-        "height": "microsoft_v7_e101_height",
-        "p_residential": "ghsl_r2023a_proportion_residential",
-    },
     "microsoft_v8": {
         "density": "microsoft_v8_density",
         "height": "microsoft_v8_height",
@@ -434,6 +395,16 @@ def _generate_provider_derived_measures(
     # GHSL writes 0.0 where it sees no building; multiplying by that directly
     # zeroes the residential volume on pixels the shipped products keep fully
     # residential - 13.9% of v8's built pixels on a test block.
+    #
+    # The splice replaced a crosswalk that set p = 1 where Microsoft's density
+    # was >= 0.01, GHSL's was < 0.01 and GHSL's p was exactly 0. The two agreed
+    # on every tested block from 2025q1 on, but not between GHSL epochs.
+    # InterpolateStrategy interpolates GHSL's p directly rather than deriving
+    # it from the interpolated volumes, so a pixel empty at one epoch has p
+    # pulled toward that epoch's placeholder 0. Where the interpolated density
+    # is then noise-suppressed to 0, the crosswalk kept the diluted p and the
+    # splice uses 1. On v8 at 2020q2 that raised residential volume 0.17% across
+    # 8 test blocks. Where the density survives, both keep the diluted p.
     p_provider = feature_dict["p_residential"].removesuffix(
         "_proportion_residential"
     )
@@ -458,18 +429,6 @@ def _generate_provider_derived_measures(
         density_is_positive = density_arr >= density_threshold
         height_is_zero = height_arr == 0
         height_arr[density_is_positive & height_is_zero] = height_min
-
-    # 2) if Microsoft places buildings somewhere GHSL does not, call them residential
-    if "reference_density" in feature_dict.keys():
-        reference_density_arr = pm_data.load_feature(
-            feature_name=feature_dict["reference_density"],
-            **feature_metadata.shared_kwargs,
-        )._ndarray
-        density_threshold = 0.01
-        density_is_positive = density_arr >= density_threshold
-        reference_density_is_zero = reference_density_arr < density_threshold
-        residential_is_zero = p_residential_arr == 0
-        p_residential_arr[density_is_positive & reference_density_is_zero & residential_is_zero] = 1
 
     out_ops = {
         "density": lambda d, _, __: d,

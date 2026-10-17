@@ -282,8 +282,18 @@ class InterpolateStrategy(ProcessStrategy):
     def generate_measures(
         self, bd_data: BuildingDensityData, pm_data: PopulationModelData
     ) -> dict[str, Path]:
+        measures = self.built_version.measures
+        # p is derived from these rather than interpolated; check before any
+        # measure is written, not partway through.
+        missing = {"density", "volume", "residential_volume"} - set(measures)
+        if "proportion_residential" in measures and missing:
+            msg = (
+                f"{self.built_version.name} cannot derive proportion_residential "
+                f"without {sorted(missing)}."
+            )
+            raise ValueError(msg)
         out_paths = {}
-        for measure in self.built_version.measures:
+        for measure in measures:
             out_measure = f"{self.built_version.name}_{measure}"
             tp_start, tp_end, w = get_time_points_and_weight(
                 built_version=self.built_version,
@@ -293,24 +303,16 @@ class InterpolateStrategy(ProcessStrategy):
             print(
                 f"Start: {tp_start}, End: {tp_end}, Weight: {w}, Time Point: {self.feature_metadata.time_point}"
             )
-            print("Loading tiles")
-            tile_start = bd_data.load_tile(
-                resolution=self.feature_metadata.resolution,
-                provider=self.built_version.name,
-                block_key=self.feature_metadata.block_key,
-                time_point=tp_start,
-                measure=measure,
-            )
-            tile_end = bd_data.load_tile(
-                resolution=self.feature_metadata.resolution,
-                provider=self.built_version.name,
-                block_key=self.feature_metadata.block_key,
-                time_point=tp_end,
-                measure=measure,
-            )
-            print("Interpolating and saving")
-            built_measure = tile_start * w + tile_end * (1 - w)
-            built_measure = utils.suppress_noise(built_measure)
+            if measure == "proportion_residential":
+                print("Deriving from the interpolated volumes and saving")
+                built_measure = self._derive_proportion_residential(
+                    bd_data, tp_start, tp_end, w
+                )
+            else:
+                print("Interpolating and saving")
+                built_measure = utils.suppress_noise(
+                    self._interpolate(bd_data, measure, tp_start, tp_end, w)
+                )
             pm_data.save_feature(
                 built_measure,
                 feature_name=out_measure,
@@ -321,6 +323,76 @@ class InterpolateStrategy(ProcessStrategy):
                 **self.feature_metadata.shared_kwargs,
             )
         return out_paths
+
+    def _interpolate(
+        self,
+        bd_data: BuildingDensityData,
+        measure: str,
+        tp_start: str,
+        tp_end: str,
+        w: float,
+    ) -> rt.RasterArray:
+        """Linearly interpolate one measure between two epochs, unsuppressed."""
+        tile_start = bd_data.load_tile(
+            resolution=self.feature_metadata.resolution,
+            provider=self.built_version.name,
+            block_key=self.feature_metadata.block_key,
+            time_point=tp_start,
+            measure=measure,
+        )
+        tile_end = bd_data.load_tile(
+            resolution=self.feature_metadata.resolution,
+            provider=self.built_version.name,
+            block_key=self.feature_metadata.block_key,
+            time_point=tp_end,
+            measure=measure,
+        )
+        interpolated: rt.RasterArray = tile_start * w + tile_end * (1 - w)
+        return interpolated
+
+    def _derive_proportion_residential(
+        self,
+        bd_data: BuildingDensityData,
+        tp_start: str,
+        tp_end: str,
+        w: float,
+    ) -> rt.RasterArray:
+        """The residential share of the interpolated volumes.
+
+        Interpolating p directly mixes in the 0 the tiles store wherever there
+        is no building, so a pixel empty at one epoch and built at the other
+        gets the building's p scaled by the interpolation weight - a twentieth
+        of it at 2020q2 for a building that appears by 2025. The ratio of the
+        interpolated volumes weights each epoch's p by its volume instead, and
+        returns the built epoch's p in that case, provided the interpolated
+        density survives noise suppression.
+
+        The tiles store p = residential_volume / volume where volume > 0 and 0
+        elsewhere, so at w = 0 or 1 this would reproduce them to float32
+        rounding; in practice it only runs between epochs. The ratio is taken
+        before noise suppression, which acts on each raster on its own and
+        would zero p wherever residential volume alone fell below the
+        threshold. p is then zeroed wherever the suppressed density is, as the
+        tiles have it, but is not itself noise-suppressed - nor is it at the
+        epochs, whose tiles are linked as they are.
+        """
+        volume = self._interpolate(bd_data, "volume", tp_start, tp_end, w)
+        vol = volume.to_numpy()
+        res = self._interpolate(
+            bd_data, "residential_volume", tp_start, tp_end, w
+        ).to_numpy()
+        density = utils.suppress_noise(
+            self._interpolate(bd_data, "density", tp_start, tp_end, w)
+        ).to_numpy()
+        p = np.where(vol > 0, res / np.where(vol > 0, vol, 1), 0)
+        p = np.where(density > 0, p, 0)
+        p = np.where(np.isnan(vol), np.nan, p)
+        return rt.RasterArray(
+            p.astype(np.float32),
+            transform=volume.transform,
+            crs=volume.crs,
+            no_data_value=np.nan,
+        )
 
     def link_features(
         self,
@@ -398,13 +470,12 @@ def _generate_provider_derived_measures(
     #
     # The splice replaced a crosswalk that set p = 1 where Microsoft's density
     # was >= 0.01, GHSL's was < 0.01 and GHSL's p was exactly 0. The two agreed
-    # on every tested block from 2025q1 on, but not between GHSL epochs.
-    # InterpolateStrategy interpolates GHSL's p directly rather than deriving
-    # it from the interpolated volumes, so a pixel empty at one epoch has p
-    # pulled toward that epoch's placeholder 0. Where the interpolated density
-    # is then noise-suppressed to 0, the crosswalk kept the diluted p and the
+    # on every tested block from 2025q1 on, but not between GHSL epochs, where
+    # GHSL's p was then interpolated directly and kept a diluted residue on
+    # pixels whose density was suppressed to 0: the crosswalk kept it, the
     # splice uses 1. On v8 at 2020q2 that raised residential volume 0.17% across
-    # 8 test blocks. Where the density survives, both keep the diluted p.
+    # 8 test blocks. GHSL's p is now the residential share of the interpolated
+    # volumes - see InterpolateStrategy._derive_proportion_residential.
     p_provider = feature_dict["p_residential"].removesuffix(
         "_proportion_residential"
     )

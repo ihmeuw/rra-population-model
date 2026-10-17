@@ -41,11 +41,6 @@ class BuiltVersion(BaseModel):
     # occupancy classes under a different root and its density has to be summed
     # and rescaled before anything can be derived from it.
     strategy: str | None = None
-    # Whether the spatially-averaged companions are built for this version.
-    # `geospatial_average_features` averages a fixed six measures across every
-    # registered version, four of which OBM does not produce, so it is opted out
-    # rather than left to fail on the first missing raster.
-    geospatial_averages: bool = True
 
     @property
     def name(self) -> str:
@@ -156,17 +151,14 @@ BUILT_VERSIONS = {
             "p_observed",
         ],
         strategy="ObmStrategy",
-        geospatial_averages=False,
     ),
 }
 
 # A denominator is a single named raster the model divides population by, so
 # this is a list of raster names - not a property of BUILT_VERSIONS. It was a
-# cross-product of the two, which cannot express either half of what is here:
-# it emitted `*_residential_density` for every version though nothing produces
-# it (a KeyError on `pixel_ghsl_r2023a_residential_density` at training time),
-# while having no way to name a provider that ships one measure and is not a
-# registered BuiltVersion.
+# cross-product of the two, which would have made every registered version a
+# denominator, OBM included, while having no way to name a provider that ships
+# one measure and is not a registered BuiltVersion.
 #
 # `microsoft_v8_obm_...` is that case: Microsoft v8's volume re-split by OBM's
 # residential fraction, written by `process_msft_obm` as its only real measure.
@@ -185,9 +177,9 @@ BUILT_VERSIONS = {
 # differs from plain v8: on 8 of 12 sampled blocks it moves total residential
 # volume by up to 19%.
 #
-# `obm_20250404lr` therefore stays in BUILT_VERSIONS - the features step must
-# still build its rasters, which is where `microsoft_v8_obm_...` comes from -
-# but is deliberately not a denominator.
+# `obm_20250404lr` therefore stays in BUILT_VERSIONS - the obm_features step
+# must still build its rasters, which is where `microsoft_v8_obm_...` comes
+# from - but is deliberately not a denominator.
 #
 # Every entry must exist as a feature raster; check against
 # `PopulationModelData.list_features` before adding one.
@@ -304,29 +296,13 @@ MSFT_V8_OBM_P_FALLBACK = 1.0
 # Deliberately empty: aliasing them under the `microsoft_v8_obm_` prefix would
 # double the layer's path count (1.0M -> 2.0M) to publish files byte-identical
 # to ones already on disk. Nothing reads them - the model loads a denominator as
-# a single named raster, and `microsoft_v8_obm` is not in BUILT_VERSIONS, so it
-# never reaches DENOMINATORS. Anyone wanting v8's density reads
-# `microsoft_v8_density`, which is its canonical name.
+# a single named raster, and DENOMINATORS names only this provider's
+# residential_volume. Anyone wanting v8's density reads `microsoft_v8_density`,
+# which is its canonical name.
 #
 # Re-populating this tuple is all that is needed to publish the aliases; they
-# are symlinks, so a rebuild is seconds per block. Note that registering the
-# provider as a denominator would *also* require `residential_density`, which
-# nothing currently produces.
+# are symlinks, so a rebuild is seconds per block.
 MSFT_V8_OBM_LINKED_MEASURES: tuple[str, ...] = ()
-# Binary surface mask splitting the built footprint on the one distinction that
-# matters downstream: was the residential fraction *observed* by OBM, or
-# *imputed*? 1 where OBM supplied it, 0 where GHSL filled in or where no source
-# saw anything and p = 1 was asserted.
-#
-# The mask is needed because `proportion_residential` cannot carry this. OBM's
-# own p = 1 and the no-source fallback are the same number, so the raster alone
-# gives a consumer no way to tell a measurement from an assumption - on one test
-# block 98% of OBM's pixels sit at p = 1 already.
-#
-# GHSL's fill and the no-source fallback are deliberately on the same side of
-# the split. A consumer who needs them apart can recover the fallback by
-# intersecting the built footprint with the complement of this mask and the
-# complement of GHSL's own density mask.
 # Measures written as real rasters rather than linked from microsoft_v8.
 #
 # Only the one. `proportion_residential` was dropped because it is recoverable

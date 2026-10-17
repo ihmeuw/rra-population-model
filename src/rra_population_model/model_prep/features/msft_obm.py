@@ -7,11 +7,13 @@ residential fraction `p`, which today comes from GHSL:
         1.0                           elsewhere
     v8_residential_volume = v8_volume x p
 
-That reconstruction reproduces the shipped raster exactly, which is what makes a
-source swap attributable. This module generalises it to a priority list of
-sources - OBM first, GHSL second, the fully-residential fallback last - so the
-layer stays global while every pixel that differs from `microsoft_v8` differs
-because OBM had an opinion there.
+That reconstruction reproduces `microsoft_v8` exactly - both go through
+`splice_p` - which is what makes a source swap attributable. (v8 rasters built
+before the splice existed differ from it before 2025q1; see
+`_generate_provider_derived_measures`.) This module generalises it to a
+priority list of sources - OBM first, GHSL second, the fully-residential
+fallback last - so the layer stays global while every pixel that differs from
+`microsoft_v8` differs because OBM had an opinion there.
 
 Note the fallback is *not* the same as reading `proportion_residential` directly.
 GHSL's raster stores 0.0 where it sees no building, so multiplying by it raw
@@ -60,27 +62,14 @@ class ResolvedP(NamedTuple):
     """The spliced fraction, and the record of where each pixel came from.
 
     `owner` is 0 where no source spoke and `i + 1` where `sources[i]` did, so it
-    is only interpretable alongside `sources` - which lists the providers that
-    were actually present, not the ones that were asked for.
+    is only interpretable alongside `sources`, the providers used, lowest
+    priority first.
     """
 
     p: NDArray[np.float64]
     owner: NDArray[np.int8]
     sources: list[str]
     counts: dict[str, int]
-
-    def owned_by(self, provider: str) -> NDArray[np.bool_]:
-        """Mask of pixels whose fraction came from `provider`."""
-        if provider not in self.sources:
-            return np.zeros(self.owner.shape, dtype=bool)
-        mask: NDArray[np.bool_] = self.owner == self.sources.index(provider) + 1
-        return mask
-
-    @property
-    def unsourced(self) -> NDArray[np.bool_]:
-        """Mask of pixels no source saw, which take the fallback."""
-        mask: NDArray[np.bool_] = self.owner == 0
-        return mask
 
 
 def resolve_p(
@@ -99,7 +88,19 @@ def resolve_p(
     Returns the fraction, the per-pixel record of which source supplied it, and
     a per-source count - the last two being the only way to tell a measured
     fraction from an assumed one downstream.
+
+    Every source must have been built at this time point. A missing one raises
+    rather than being skipped: skipping is how the product came out GHSL-only,
+    under the OBM name, when it was built before OBM existed. For the same
+    reason an empty `sources` raises rather than returning the fallback
+    everywhere.
     """
+    if not sources:
+        msg = (
+            f"No residential-fraction sources for {block_key} at {time_point}; "
+            f"p would be {pmc.MSFT_V8_OBM_P_FALLBACK} everywhere."
+        )
+        raise ValueError(msg)
     template = pm_data.load_feature(
         resolution=resolution, block_key=block_key, time_point=time_point,
         feature_name=f"{pmc.MSFT_V8_SOURCE_PROVIDER}_volume",
@@ -107,11 +108,19 @@ def resolve_p(
     # Lowest priority first, so the preferred source is applied last and wins.
     layers, present = [], []
     for provider in reversed(sources):
-        if not pm_data.feature_exists(
-            resolution=resolution, block_key=block_key, time_point=time_point,
-            feature_name=f"{provider}_proportion_residential",
-        ):
-            continue
+        for measure in ("proportion_residential", "density"):
+            if not pm_data.feature_exists(
+                resolution=resolution, block_key=block_key, time_point=time_point,
+                feature_name=f"{provider}_{measure}",
+            ):
+                command = (
+                    "obm_features" if provider == pmc.OBM_PROVIDER else "features"
+                )
+                msg = (
+                    f"No {provider}_{measure} for {block_key} at {time_point} "
+                    f"({resolution}m). Run `pmrun model_prep {command}` first."
+                )
+                raise FileNotFoundError(msg)
         def load(measure: str, _p: str = provider) -> NDArray[Any]:
             return pm_data.load_feature(
                 resolution=resolution, block_key=block_key, time_point=time_point,
@@ -121,12 +130,7 @@ def resolve_p(
         layers.append((load("proportion_residential"), load("density")))
         present.append(provider)
 
-    if not layers:
-        shape = template.to_numpy().shape
-        p = np.full(shape, pmc.MSFT_V8_OBM_P_FALLBACK, dtype=np.float64)
-        owner = np.zeros(shape, dtype=np.int8)
-    else:
-        p, owner = splice_p(layers)
+    p, owner = splice_p(layers)
 
     # Count over the pixels v8 actually calls built. Counting over all land
     # would report ~84% fallback on a typical block simply because most land
@@ -150,12 +154,33 @@ def process_msft_obm(
 ) -> None:
     """Build and link the Microsoft-v8-with-OBM layers for one block."""
     src = pmc.MSFT_V8_SOURCE_PROVIDER
+    # Every modeling-frame block has Microsoft v8 - `features` raises on a
+    # missing tile - so a missing volume means `features` has not run here.
     if not pm_data.feature_exists(
         resolution=resolution, block_key=block_key, time_point=time_point,
         feature_name=f"{src}_volume",
     ):
-        print(f"No {src} volume for {block_key} at {time_point}; skipping.")
-        return
+        msg = (
+            f"No {src}_volume for {block_key} at {time_point} ({resolution}m). "
+            "Run `pmrun model_prep features` first."
+        )
+        raise FileNotFoundError(msg)
+
+    # OBM covers 2,902 of 4,797 blocks, so a missing OBM raster is expected on
+    # the rest; everywhere else it means `obm_features` has not run, and
+    # `resolve_p` raises. Coverage is the covariate's block directory existing -
+    # the same test ObmStrategy uses to decide whether to build the block.
+    if pmc.OBM_PROVIDER in sources:
+        obm_root = pm_data.open_building_map_covariates / f"{resolution}m"
+        if not obm_root.is_dir():
+            msg = (
+                f"No OBM covariate at {resolution}m ({obm_root}), so "
+                f"{provider} would carry no OBM at all."
+            )
+            raise FileNotFoundError(msg)
+        if not (obm_root / block_key).exists():
+            print(f"No OBM coverage for {block_key}; p from the other sources.")
+            sources = tuple(s for s in sources if s != pmc.OBM_PROVIDER)
 
     print(f"Resolving p for {block_key} at {time_point}")
     resolved = resolve_p(pm_data, resolution, block_key, time_point, sources)
@@ -243,35 +268,3 @@ def _fill_earlier_time_points(
                 block_key=block_key,
                 time_point=earlier_tp,
             )
-
-
-def check_reproduces_source(
-    pm_data: PopulationModelData,
-    resolution: str,
-    block_key: str,
-    time_point: str,
-    tolerance: float = 1e-6,
-) -> float:
-    """Verify the GHSL-only path reproduces the shipped microsoft_v8 raster.
-
-    This is the precondition for the whole comparison: if feeding the same
-    source GHSL uses does not return the shipped layer, then any later
-    difference could be our arithmetic rather than the source swap.
-    """
-    src = pmc.MSFT_V8_SOURCE_PROVIDER
-    p = resolve_p(pm_data, resolution, block_key, time_point, ("ghsl_r2023a",)).p
-    vol = pm_data.load_feature(
-        resolution=resolution, block_key=block_key, time_point=time_point,
-        feature_name=f"{src}_volume").to_numpy()
-    shipped = pm_data.load_feature(
-        resolution=resolution, block_key=block_key, time_point=time_point,
-        feature_name=f"{src}_residential_volume").to_numpy()
-    built = np.isfinite(vol) & (vol > 0)
-    if not built.any():
-        return 0.0
-    err = float(np.abs((vol * p)[built] - shipped[built]).max())
-    if err > tolerance:
-        msg = (f"GHSL-only reconstruction does not reproduce {src} on {block_key} "
-               f"at {time_point}: max|diff| = {err}")
-        raise ValueError(msg)
-    return err

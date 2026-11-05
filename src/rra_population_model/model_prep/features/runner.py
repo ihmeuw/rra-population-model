@@ -429,7 +429,7 @@ def features(
             },
             log_root=pm_data.log_dir("preprocess_features"),
             max_attempts=3,
-            concurrency_limit=1_000,
+            concurrency_limit=2_500,
         )
 
 

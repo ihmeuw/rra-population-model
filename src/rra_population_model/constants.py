@@ -88,7 +88,7 @@ BUILT_VERSIONS = {
         version="v8",
         time_points=[
             f"{y}q{q}" for y, q in itertools.product(range(2020, 2027), range(1, 5))
-        ][1:-3],
+        ][1:-1],
         measures=[
             "density",
             "height",

@@ -1,5 +1,6 @@
 import itertools
 import shutil
+from pathlib import Path
 
 import click
 from lightning import Trainer
@@ -90,6 +91,10 @@ def train_main(
     trainer.fit(model, data_module)
 
     ckpt_path = trainer.checkpoint_callback.best_model_path  # type: ignore[union-attr]
+    # Lightning saves checkpoints as a temp file (always 0o600, whatever the
+    # umask) moved into place. Use the 0o664 the pipeline's other files get,
+    # so the rest of the team can run inference from it.
+    Path(ckpt_path).chmod(0o664)
     ckpt_link = version_root / "best_model.ckpt"
     ckpt_link.symlink_to(ckpt_path)
 
